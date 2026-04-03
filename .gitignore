@@ -1,0 +1,56 @@
+# Claude Code local config
+.claude/
+Client/.claude/
+Server/.claude/
+CLAUDE.md
+
+# GitHub Copilot instructions (internal)
+.github/copilot-instructions.md
+.github/instructions/
+
+# AI-specific / internal planning docs
+docs/brain/
+docs/CODEMAPS/
+docs/designs/
+docs/research/
+docs/superpowers/
+skills/
+
+# Server runtime artifacts
+Server/chatserver.exe
+Server/chatserver.exe~
+Server/config.yaml
+Server/data/
+
+# Test coverage artifacts
+*.out
+Server/cov.out
+Server/cover.out
+Server/coverage.out
+Server/ws_cover.out
+Server/ws_cov.out
+
+# Client build artifacts
+Client/publish/
+Client/publish-single/
+Client/publish-release/
+
+# HTML mockups (large design reference files)
+Client/login-mockup.html
+Client/ui-mockup.html
+
+# Node modules
+node_modules/
+
+# AI tooling
+.gstack/
+.claude-flow/
+.mcp.json
+.superpowers/
+
+# Internal dev files
+SKILL.md
+TODOS.md
+CLAUDE.md
+DESIGN.md
+Client/CLIENT-REVIEW.md

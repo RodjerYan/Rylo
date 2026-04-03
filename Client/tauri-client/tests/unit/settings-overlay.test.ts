@@ -1,0 +1,814 @@
+﻿import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createSettingsOverlay } from "@components/SettingsOverlay";
+
+// Mock logger
+vi.mock("@lib/logger", () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+  getLogBuffer: () => [],
+  clearLogBuffer: vi.fn(),
+  addLogListener: () => () => {},
+  setLogLevel: vi.fn(),
+}));
+
+// Mock stores
+const mockSetTheme = vi.fn();
+vi.mock("@stores/ui.store", () => ({
+  uiStore: {
+    getState: () => ({ settingsOpen: false }),
+    subscribe: () => () => {},
+    subscribeSelector: vi.fn((_sel: unknown, _listener: unknown) => () => {}),
+  },
+  setTheme: (...args: unknown[]) => mockSetTheme(...args),
+}));
+
+vi.mock("@lib/livekitSession", () => ({
+  switchInputDevice: vi.fn().mockResolvedValue(undefined),
+  switchOutputDevice: vi.fn().mockResolvedValue(undefined),
+  setVoiceSensitivity: vi.fn(),
+  setInputVolume: vi.fn(),
+  setOutputVolume: vi.fn(),
+  reapplyAudioProcessing: vi.fn().mockResolvedValue(undefined),
+  getSessionDebugInfo: vi.fn().mockReturnValue({}),
+}));
+
+vi.mock("@stores/auth.store", () => ({
+  authStore: {
+    getState: () => ({
+      user: { id: 1, username: "testuser", totp_enabled: false },
+    }),
+  },
+  updateUser: vi.fn(),
+}));
+
+function clickEl(el: Element | null): void {
+  expect(el).not.toBeNull();
+  (el as HTMLElement).click();
+}
+
+function getTab(container: HTMLDivElement, index: number): HTMLElement {
+  const tabs = container.querySelectorAll(".settings-sidebar > button.settings-nav-item");
+  const tab = tabs[index];
+  expect(tab).toBeDefined();
+  return tab as HTMLElement;
+}
+
+describe("SettingsOverlay", () => {
+  let container: HTMLDivElement;
+
+  const defaultOptions = {
+    onClose: vi.fn(),
+    onChangePassword: vi.fn().mockResolvedValue(undefined),
+    onUpdateProfile: vi.fn().mockResolvedValue(undefined),
+    onLogout: vi.fn(),
+    onDeleteAccount: vi.fn().mockResolvedValue(undefined),
+    onStatusChange: vi.fn(),
+    onEnableTotp: vi.fn().mockResolvedValue({ qr_uri: "otpauth://test", backup_codes: [] }),
+    onConfirmTotp: vi.fn().mockResolvedValue(undefined),
+    onDisableTotp: vi.fn().mockResolvedValue(undefined),
+  };
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    localStorage.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  it("mounts with all tabs", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const tabs = container.querySelectorAll(".settings-sidebar > button.settings-nav-item");
+    const tabNames = Array.from(tabs).map((t) => t.textContent);
+    expect(tabNames).toEqual([
+      "Account",
+      "Appearance",
+      "Notifications",
+      "Text & Images",
+      "Accessibility",
+      "Voice & Audio",
+      "Keybinds",
+      "Advanced",
+      "Logs",
+    ]);
+
+    overlay.destroy?.();
+  });
+
+  it("starts on Account tab", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const activeTab = container.querySelector(".settings-sidebar > button.settings-nav-item.active");
+    expect(activeTab?.textContent).toBe("Account");
+
+    overlay.destroy?.();
+  });
+
+  it("switches tabs on click", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const appearanceTab = getTab(container, 1);
+    appearanceTab.click();
+
+    expect(appearanceTab.classList.contains("active")).toBe(true);
+    const prevActive = getTab(container, 0);
+    expect(prevActive.classList.contains("active")).toBe(false);
+
+    overlay.destroy?.();
+  });
+
+  it("renders close button that calls onClose", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    clickEl(container.querySelector(".settings-close-btn"));
+    expect(defaultOptions.onClose).toHaveBeenCalled();
+
+    overlay.destroy?.();
+  });
+
+  it("closes on Escape key", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+    overlay.open();
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(defaultOptions.onClose).toHaveBeenCalled();
+
+    overlay.destroy?.();
+  });
+
+  // --- Appearance tab tests ---
+
+  it("applies theme on click", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    getTab(container, 1).click();
+
+    const themeOptions = container.querySelectorAll(".theme-opt");
+    expect(themeOptions.length).toBe(4);
+
+    const midnight = themeOptions[2] as HTMLElement;
+    midnight.click();
+
+    expect(midnight.classList.contains("active")).toBe(true);
+    expect(document.documentElement.style.getPropertyValue("--bg-primary")).toBe("#1a1a2e");
+    // Theme persists only via themes.ts (rylo:theme:active), not via savePref
+    expect(localStorage.getItem("rylo:theme:active")).toBe("midnight");
+    expect(localStorage.getItem("rylo:settings:theme")).toBeNull();
+    expect(mockSetTheme).toHaveBeenCalledWith("midnight");
+
+    overlay.destroy?.();
+  });
+
+  it("persists and restores font size", () => {
+    localStorage.setItem("rylo:settings:fontSize", "18");
+
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+    getTab(container, 1).click();
+
+    const slider = container.querySelector(".settings-slider") as HTMLInputElement;
+    expect(slider.value).toBe("18");
+    expect(document.documentElement.style.getPropertyValue("--font-size")).toBe("18px");
+
+    overlay.destroy?.();
+  });
+
+  it("changes font size via slider", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+    getTab(container, 1).click();
+
+    const slider = container.querySelector(".settings-slider") as HTMLInputElement;
+    slider.value = "14";
+    slider.dispatchEvent(new Event("input"));
+
+    expect(document.documentElement.style.getPropertyValue("--font-size")).toBe("14px");
+    expect(localStorage.getItem("rylo:settings:fontSize")).toBe("14");
+
+    overlay.destroy?.();
+  });
+
+  it("toggles compact mode", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+    getTab(container, 1).click();
+
+    const toggle = container.querySelector(".toggle") as HTMLElement;
+    expect(toggle).not.toBeNull();
+    toggle.click();
+
+    expect(toggle.classList.contains("on")).toBe(true);
+    expect(document.documentElement.classList.contains("compact-mode")).toBe(true);
+    expect(localStorage.getItem("rylo:settings:compactMode")).toBe("true");
+
+    overlay.destroy?.();
+  });
+
+  // --- Notifications tab tests ---
+
+  it("renders notification toggles", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+    getTab(container, 2).click();
+
+    const toggles = container.querySelectorAll(".toggle");
+    expect(toggles.length).toBe(4);
+
+    overlay.destroy?.();
+  });
+
+  it("persists notification toggle state", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+    getTab(container, 2).click();
+
+    const toggles = container.querySelectorAll(".toggle");
+    const suppressToggle = toggles[2] as HTMLElement;
+    suppressToggle.click();
+
+    expect(suppressToggle.classList.contains("on")).toBe(true);
+    expect(localStorage.getItem("rylo:settings:suppressEveryone")).toBe("true");
+
+    overlay.destroy?.();
+  });
+
+  // --- Voice & Audio tab tests ---
+
+  it("renders Voice & Audio tab with device selectors", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+    getTab(container, 5).click();
+
+    const selects = container.querySelectorAll("select.form-input");
+    // input device, output device, video quality, video device = 4
+    expect(selects.length).toBe(4);
+
+    const sliders = container.querySelectorAll(".settings-slider");
+    expect(sliders.length).toBeGreaterThanOrEqual(1);
+
+    const toggles = container.querySelectorAll(".toggle");
+    // 4 toggles: echo cancellation, noise suppression, auto gain control,
+    // enhanced noise suppression (RNNoise)
+    expect(toggles.length).toBe(4);
+
+    overlay.destroy?.();
+  });
+
+  it("renders voice sensitivity meter bar", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+    getTab(container, 5).click();
+
+    // Sensitivity is now a draggable meter bar, not a slider.
+    const meterBar = container.querySelector(".mic-meter-bar") as HTMLElement;
+    expect(meterBar).not.toBeNull();
+    const threshold = container.querySelector(".mic-meter-threshold") as HTMLElement;
+    expect(threshold).not.toBeNull();
+
+    overlay.destroy?.();
+  });
+
+  it("persists audio device selection on change", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+    getTab(container, 5).click();
+
+    const selects = container.querySelectorAll("select.form-input");
+    const inputSelect = selects[0] as HTMLSelectElement;
+    inputSelect.dispatchEvent(new Event("change"));
+
+    expect(localStorage.getItem("rylo:settings:audioInputDevice")).toBe('""');
+
+    overlay.destroy?.();
+  });
+
+  it("toggles echo cancellation", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+    getTab(container, 5).click();
+
+    const toggles = container.querySelectorAll(".toggle");
+    const echoToggle = toggles[0] as HTMLElement;
+
+    // Default is on
+    expect(echoToggle.classList.contains("on")).toBe(true);
+    echoToggle.click();
+    expect(echoToggle.classList.contains("on")).toBe(false);
+    expect(localStorage.getItem("rylo:settings:echoCancellation")).toBe("false");
+
+    overlay.destroy?.();
+  });
+
+  // --- Account tab tests ---
+
+  it("shows current username", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const acName = container.querySelector(".account-header-name");
+    expect(acName?.textContent).toBe("testuser");
+
+    overlay.destroy?.();
+  });
+
+  it("calls onLogout when logout button clicked", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    clickEl(container.querySelector(".settings-nav-item.danger"));
+    expect(defaultOptions.onLogout).toHaveBeenCalled();
+
+    overlay.destroy?.();
+  });
+
+  it("validates password change requires minimum length", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const inputs = container.querySelectorAll("input[type='password']");
+    (inputs[0] as HTMLInputElement).value = "oldpass123";
+    (inputs[1] as HTMLInputElement).value = "short";
+    (inputs[2] as HTMLInputElement).value = "short";
+
+    const changePwBtn = Array.from(container.querySelectorAll(".ac-btn"))
+      .find((b) => b.textContent === "Change Password") as HTMLElement;
+    changePwBtn.click();
+
+    expect(defaultOptions.onChangePassword).not.toHaveBeenCalled();
+
+    overlay.destroy?.();
+  });
+
+  it("validates password confirmation matches", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const inputs = container.querySelectorAll("input[type='password']");
+    (inputs[0] as HTMLInputElement).value = "oldpass123";
+    (inputs[1] as HTMLInputElement).value = "newpassword123";
+    (inputs[2] as HTMLInputElement).value = "differentpassword";
+
+    const changePwBtn = Array.from(container.querySelectorAll(".ac-btn"))
+      .find((b) => b.textContent === "Change Password") as HTMLElement;
+    changePwBtn.click();
+
+    expect(defaultOptions.onChangePassword).not.toHaveBeenCalled();
+
+    overlay.destroy?.();
+  });
+
+  it("calls onChangePassword and clears inputs on success", async () => {
+    const onChangePassword = vi.fn().mockResolvedValue(undefined);
+    const overlay = createSettingsOverlay({ ...defaultOptions, onChangePassword });
+    overlay.mount(container);
+
+    const inputs = container.querySelectorAll("input[type='password']");
+    (inputs[0] as HTMLInputElement).value = "oldpass123";
+    (inputs[1] as HTMLInputElement).value = "newpassword123";
+    (inputs[2] as HTMLInputElement).value = "newpassword123";
+
+    const changePwBtn = Array.from(container.querySelectorAll(".ac-btn"))
+      .find((b) => b.textContent === "Change Password") as HTMLElement;
+    changePwBtn.click();
+
+    await vi.waitFor(() => {
+      expect(onChangePassword).toHaveBeenCalledWith("oldpass123", "newpassword123");
+    });
+
+    // Inputs should be cleared after success
+    await vi.waitFor(() => {
+      expect((inputs[0] as HTMLInputElement).value).toBe("");
+      expect((inputs[1] as HTMLInputElement).value).toBe("");
+      expect((inputs[2] as HTMLInputElement).value).toBe("");
+    });
+
+    overlay.destroy?.();
+  });
+
+  it("shows error when password change fails", async () => {
+    const onChangePassword = vi.fn().mockRejectedValue(new Error("Incorrect old password"));
+    const overlay = createSettingsOverlay({ ...defaultOptions, onChangePassword });
+    overlay.mount(container);
+
+    const inputs = container.querySelectorAll("input[type='password']");
+    (inputs[0] as HTMLInputElement).value = "wrongold";
+    (inputs[1] as HTMLInputElement).value = "newpassword123";
+    (inputs[2] as HTMLInputElement).value = "newpassword123";
+
+    const changePwBtn = Array.from(container.querySelectorAll(".ac-btn"))
+      .find((b) => b.textContent === "Change Password") as HTMLElement;
+    changePwBtn.click();
+
+    await vi.waitFor(() => {
+      // Find the error element near the password fields
+      const errorEls = container.querySelectorAll("div[style*='color:var(--red)']");
+      const pwError = Array.from(errorEls).find((el) => el.textContent === "Incorrect old password");
+      expect(pwError).not.toBeUndefined();
+    });
+
+    overlay.destroy?.();
+  });
+
+  it("shows error when username update fails", async () => {
+    const onUpdateProfile = vi.fn().mockRejectedValue(new Error("Username taken"));
+    const overlay = createSettingsOverlay({ ...defaultOptions, onUpdateProfile });
+    overlay.mount(container);
+
+    const editBtn = container.querySelector(".account-field-edit") as HTMLElement;
+    editBtn.click();
+
+    const editInput = container.querySelector("input.form-input[type='text']") as HTMLInputElement;
+    editInput.value = "taken-name";
+
+    const saveBtn = Array.from(container.querySelectorAll(".ac-btn"))
+      .find((b) => b.textContent === "Save") as HTMLElement;
+    saveBtn.click();
+
+    await vi.waitFor(() => {
+      const errorEls = container.querySelectorAll("div[style*='color:var(--red)']");
+      const nameError = Array.from(errorEls).find((el) => el.textContent === "Username taken");
+      expect(nameError).not.toBeUndefined();
+    });
+
+    overlay.destroy?.();
+  });
+
+  it("Edit User Profile button opens the same edit form", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    // Click "Edit User Profile" button instead of "Edit" button
+    const editProfileBtn = Array.from(container.querySelectorAll(".ac-btn"))
+      .find((b) => b.textContent === "Edit User Profile") as HTMLElement;
+    editProfileBtn.click();
+
+    const editInput = container.querySelector("input.form-input[type='text']") as HTMLInputElement;
+    expect(editInput).not.toBeNull();
+    // The edit form should be visible
+    const editForm = editInput.closest(".setting-row") as HTMLElement;
+    expect(editForm.style.display).toBe("flex");
+
+    overlay.destroy?.();
+  });
+
+  it("Cancel button hides the username edit form", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    // Open edit form
+    const editBtn = container.querySelector(".account-field-edit") as HTMLElement;
+    editBtn.click();
+
+    // Click cancel
+    const cancelBtn = Array.from(container.querySelectorAll(".ac-btn"))
+      .find((b) => b.textContent === "Cancel") as HTMLElement;
+    cancelBtn.click();
+
+    // Edit form should be hidden
+    const editInput = container.querySelector("input.form-input[type='text']") as HTMLInputElement;
+    const editForm = editInput.closest(".setting-row") as HTMLElement;
+    expect(editForm.style.display).toBe("none");
+
+    overlay.destroy?.();
+  });
+
+  // --- Delete account tests ---
+
+  it("shows confirmation area when Delete Account is clicked", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const triggerBtn = container.querySelector("[data-testid='delete-account-trigger']") as HTMLElement;
+    expect(triggerBtn).not.toBeNull();
+
+    const confirmArea = container.querySelector("[data-testid='delete-account-confirm-area']") as HTMLElement;
+    expect(confirmArea.style.display).toBe("none");
+
+    triggerBtn.click();
+
+    expect(confirmArea.style.display).toBe("block");
+    expect(triggerBtn.style.display).toBe("none");
+
+    overlay.destroy?.();
+  });
+
+  it("hides confirmation area when Cancel is clicked", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const triggerBtn = container.querySelector("[data-testid='delete-account-trigger']") as HTMLElement;
+    triggerBtn.click();
+
+    const confirmArea = container.querySelector("[data-testid='delete-account-confirm-area']") as HTMLElement;
+    expect(confirmArea.style.display).toBe("block");
+
+    const cancelBtn = confirmArea.querySelector("button:not(.account-delete-btn)") as HTMLElement;
+    cancelBtn.click();
+
+    expect(confirmArea.style.display).toBe("none");
+    expect(triggerBtn.style.display).toBe("");
+
+    overlay.destroy?.();
+  });
+
+  it("shows error when confirming delete without password", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const triggerBtn = container.querySelector("[data-testid='delete-account-trigger']") as HTMLElement;
+    triggerBtn.click();
+
+    const confirmBtn = container.querySelector("[data-testid='delete-account-confirm']") as HTMLElement;
+    confirmBtn.click();
+
+    const errorEl = container.querySelector("[data-testid='delete-account-error']") as HTMLElement;
+    expect(errorEl.textContent).toBe("Password is required.");
+    expect(defaultOptions.onDeleteAccount).not.toHaveBeenCalled();
+
+    overlay.destroy?.();
+  });
+
+  it("calls onDeleteAccount with password on confirm", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const triggerBtn = container.querySelector("[data-testid='delete-account-trigger']") as HTMLElement;
+    triggerBtn.click();
+
+    const passwordInput = container.querySelector("[data-testid='delete-account-password']") as HTMLInputElement;
+    passwordInput.value = "mypassword123";
+
+    const confirmBtn = container.querySelector("[data-testid='delete-account-confirm']") as HTMLButtonElement;
+    confirmBtn.click();
+
+    expect(defaultOptions.onDeleteAccount).toHaveBeenCalledWith("mypassword123");
+
+    overlay.destroy?.();
+  });
+
+  it("disables confirm button and shows 'Deleting...' during delete", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const triggerBtn = container.querySelector("[data-testid='delete-account-trigger']") as HTMLElement;
+    triggerBtn.click();
+
+    const passwordInput = container.querySelector("[data-testid='delete-account-password']") as HTMLInputElement;
+    passwordInput.value = "mypassword123";
+
+    const confirmBtn = container.querySelector("[data-testid='delete-account-confirm']") as HTMLButtonElement;
+    confirmBtn.click();
+
+    expect(confirmBtn.disabled).toBe(true);
+    expect(confirmBtn.textContent).toBe("Deleting...");
+
+    overlay.destroy?.();
+  });
+
+  it("shows error and re-enables button on delete failure", async () => {
+    const failOptions = {
+      ...defaultOptions,
+      onDeleteAccount: vi.fn().mockRejectedValue(new Error("Wrong password")),
+    };
+
+    const overlay = createSettingsOverlay(failOptions);
+    overlay.mount(container);
+
+    const triggerBtn = container.querySelector("[data-testid='delete-account-trigger']") as HTMLElement;
+    triggerBtn.click();
+
+    const passwordInput = container.querySelector("[data-testid='delete-account-password']") as HTMLInputElement;
+    passwordInput.value = "wrongpassword";
+
+    const confirmBtn = container.querySelector("[data-testid='delete-account-confirm']") as HTMLButtonElement;
+    confirmBtn.click();
+
+    // Wait for the rejected promise to settle
+    await vi.waitFor(() => {
+      expect(confirmBtn.disabled).toBe(false);
+    });
+
+    const errorEl = container.querySelector("[data-testid='delete-account-error']") as HTMLElement;
+    expect(errorEl.textContent).toBe("Wrong password");
+    expect(confirmBtn.textContent).toBe("Confirm Delete");
+
+    overlay.destroy?.();
+  });
+
+  it("clears password input when reopening confirmation area", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const triggerBtn = container.querySelector("[data-testid='delete-account-trigger']") as HTMLElement;
+    triggerBtn.click();
+
+    const passwordInput = container.querySelector("[data-testid='delete-account-password']") as HTMLInputElement;
+    passwordInput.value = "typed-something";
+
+    // Cancel and reopen
+    const confirmArea = container.querySelector("[data-testid='delete-account-confirm-area']") as HTMLElement;
+    const cancelBtn = confirmArea.querySelector("button:not(.account-delete-btn)") as HTMLElement;
+    cancelBtn.click();
+    triggerBtn.click();
+
+    expect(passwordInput.value).toBe("");
+
+    overlay.destroy?.();
+  });
+
+  // --- Open/Close ---
+
+  it("open() adds .open class, close() removes it", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const root = container.querySelector(".settings-overlay");
+    expect(root?.classList.contains("open")).toBe(false);
+
+    overlay.open();
+    expect(root?.classList.contains("open")).toBe(true);
+
+    overlay.close();
+    expect(root?.classList.contains("open")).toBe(false);
+
+    overlay.destroy?.();
+  });
+
+  // --- Username validation ---
+
+  it("rejects single-character username (min 2)", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    // Click "Edit" to open username edit form
+    const editBtn = container.querySelector(".account-field-edit") as HTMLElement;
+    editBtn.click();
+
+    // Type a single character
+    const editInput = container.querySelector("input.form-input[type='text']") as HTMLInputElement;
+    editInput.value = "A";
+
+    // Click Save
+    const saveBtn = Array.from(container.querySelectorAll(".ac-btn"))
+      .find((b) => b.textContent === "Save") as HTMLElement;
+    saveBtn.click();
+
+    // Should NOT call onUpdateProfile
+    expect(defaultOptions.onUpdateProfile).not.toHaveBeenCalled();
+
+    overlay.destroy?.();
+  });
+
+  it("accepts two-character username (min 2)", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const editBtn = container.querySelector(".account-field-edit") as HTMLElement;
+    editBtn.click();
+
+    const editInput = container.querySelector("input.form-input[type='text']") as HTMLInputElement;
+    editInput.value = "AB";
+
+    const saveBtn = Array.from(container.querySelectorAll(".ac-btn"))
+      .find((b) => b.textContent === "Save") as HTMLElement;
+    saveBtn.click();
+
+    expect(defaultOptions.onUpdateProfile).toHaveBeenCalledWith("AB");
+
+    overlay.destroy?.();
+  });
+
+  // --- Status selector ---
+
+  it("labels the offline status as 'Offline' (not 'Invisible')", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const statusLabels = container.querySelectorAll(".settings-status-label");
+    const labels = Array.from(statusLabels).map((el) => el.textContent);
+    expect(labels).toContain("Offline");
+    expect(labels).not.toContain("Invisible");
+
+    overlay.destroy?.();
+  });
+
+  it("status rows have role=button and tabindex for keyboard access", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const rows = container.querySelectorAll(".settings-status-option");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.getAttribute("role")).toBe("button");
+      expect(row.getAttribute("tabindex")).toBe("0");
+    }
+
+    overlay.destroy?.();
+  });
+
+  it("status row activates on Enter key", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const rows = container.querySelectorAll(".settings-status-option");
+    const idleRow = Array.from(rows).find(
+      (r) => r.querySelector(".settings-status-label")?.textContent === "Idle",
+    ) as HTMLElement;
+    expect(idleRow).toBeDefined();
+    idleRow.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(idleRow.classList.contains("active")).toBe(true);
+    expect(defaultOptions.onStatusChange).toHaveBeenCalledWith("idle");
+
+    overlay.destroy?.();
+  });
+
+  it("status row activates on Space key", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const rows = container.querySelectorAll(".settings-status-option");
+    const dndRow = Array.from(rows).find(
+      (r) => r.querySelector(".settings-status-label")?.textContent === "Do Not Disturb",
+    ) as HTMLElement;
+    expect(dndRow).toBeDefined();
+    dndRow.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+
+    expect(dndRow.classList.contains("active")).toBe(true);
+    expect(defaultOptions.onStatusChange).toHaveBeenCalledWith("dnd");
+
+    overlay.destroy?.();
+  });
+
+  // --- Connect page: Account tab gating ---
+
+  it("hides Account tab when isAuthenticated is false", () => {
+    const overlay = createSettingsOverlay({ ...defaultOptions, isAuthenticated: false });
+    overlay.mount(container);
+
+    const tabs = container.querySelectorAll(".settings-sidebar > button.settings-nav-item");
+    const tabNames = Array.from(tabs).map((t) => t.textContent);
+    expect(tabNames).not.toContain("Account");
+    // Should start on Appearance instead
+    const activeTab = container.querySelector(".settings-sidebar > button.settings-nav-item.active");
+    expect(activeTab?.textContent).toBe("Appearance");
+
+    overlay.destroy?.();
+  });
+
+  it("hides 'Edit Profile' link when isAuthenticated is false", () => {
+    const overlay = createSettingsOverlay({ ...defaultOptions, isAuthenticated: false });
+    overlay.mount(container);
+
+    const editLink = container.querySelector(".settings-sidebar-edit") as HTMLElement;
+    expect(editLink.style.display).toBe("none");
+
+    overlay.destroy?.();
+  });
+
+  it("hides the logout action when isAuthenticated is false", () => {
+    const overlay = createSettingsOverlay({ ...defaultOptions, isAuthenticated: false });
+    overlay.mount(container);
+
+    expect(container.querySelector(".settings-sidebar-logout")).toBeNull();
+    expect(container.querySelector(".settings-nav-item.danger")).toBeNull();
+
+    overlay.destroy?.();
+  });
+
+  it("shows Account tab by default (isAuthenticated not set)", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    const tabs = container.querySelectorAll(".settings-sidebar > button.settings-nav-item");
+    const tabNames = Array.from(tabs).map((t) => t.textContent);
+    expect(tabNames).toContain("Account");
+
+    overlay.destroy?.();
+  });
+
+  // --- Cleanup ---
+
+  it("destroy removes root from DOM", () => {
+    const overlay = createSettingsOverlay(defaultOptions);
+    overlay.mount(container);
+
+    expect(container.querySelector(".settings-overlay")).not.toBeNull();
+    overlay.destroy?.();
+    expect(container.querySelector(".settings-overlay")).toBeNull();
+  });
+});
