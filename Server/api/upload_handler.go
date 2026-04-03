@@ -65,8 +65,7 @@ func MountUploadRoutes(r chi.Router, database *db.DB, store *storage.Storage, al
 	// Default avatars (stored in /RyloData/Avatars on Yandex Disk).
 	r.With(AuthMiddleware(database)).
 		Get("/api/v1/profile/default-avatars", handleListDefaultAvatars(replicator))
-	r.With(AuthMiddleware(database)).
-		Get("/api/v1/profile/default-avatars/{category}/{name}", handleServeDefaultAvatarPreview(replicator))
+	r.Get("/api/v1/profile/default-avatars/{category}/{name}", handleServeDefaultAvatarPreview(replicator))
 	r.With(AuthMiddleware(database)).
 		Post("/api/v1/profile/default-avatar", handleSelectDefaultAvatar(database, store, replicator))
 

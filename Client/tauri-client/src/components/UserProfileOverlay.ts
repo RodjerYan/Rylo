@@ -3,6 +3,7 @@ import { authStore } from "@stores/auth.store";
 import { dmStore } from "@stores/dm.store";
 import { membersStore } from "@stores/members.store";
 import { formatLastSeenRu, formatStatusRu } from "@lib/presence";
+import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
 
 export interface UserProfileInput {
   readonly id: number;
@@ -34,6 +35,8 @@ let statusEl: HTMLDivElement | null = null;
 let roleEl: HTMLDivElement | null = null;
 let closeBtn: HTMLButtonElement | null = null;
 let escHandlerBound = false;
+let avatarRequestSeq = 0;
+let bannerRequestSeq = 0;
 
 function translateRole(role: string): string {
   const normalized = role.trim().toLowerCase();
@@ -139,14 +142,38 @@ function setAvatar(avatar: string | null, username: string): void {
   }
   clearChildren(avatarEl);
   const initial = username.charAt(0).toUpperCase() || "?";
+  avatarRequestSeq += 1;
+  const requestId = avatarRequestSeq;
 
   if (avatar !== null && avatar.trim() !== "") {
-    const image = createElement("img", {
-      src: avatar,
-      alt: username,
-      class: "profile-overlay-avatar-img",
+    const resolved = resolveServerUrl(avatar);
+    if (!isSafeUrl(resolved)) {
+      setText(avatarEl, initial);
+      return;
+    }
+    const placeholder = createElement("div", { class: "profile-overlay-avatar-loading" }, "...");
+    avatarEl.appendChild(placeholder);
+    void fetchImageAsDataUrl(resolved).then((dataUrl) => {
+      if (avatarEl === null || requestId !== avatarRequestSeq) {
+        return;
+      }
+      clearChildren(avatarEl);
+      if (dataUrl === null || dataUrl.trim() === "") {
+        setText(avatarEl, initial);
+        return;
+      }
+      const image = createElement("img", {
+        src: dataUrl,
+        alt: username,
+        class: "profile-overlay-avatar-img",
+      });
+      avatarEl.appendChild(image);
+    }).catch(() => {
+      if (avatarEl !== null && requestId === avatarRequestSeq) {
+        clearChildren(avatarEl);
+        setText(avatarEl, initial);
+      }
     });
-    avatarEl.appendChild(image);
     return;
   }
 
@@ -157,10 +184,35 @@ function setBanner(banner: string | null): void {
   if (bannerEl === null) {
     return;
   }
+  bannerRequestSeq += 1;
+  const requestId = bannerRequestSeq;
   if (banner !== null && banner.trim() !== "") {
-    bannerEl.style.backgroundImage = `url("${banner}")`;
-    bannerEl.style.backgroundSize = "cover";
-    bannerEl.style.backgroundPosition = "center";
+    const resolved = resolveServerUrl(banner);
+    if (!isSafeUrl(resolved)) {
+      bannerEl.style.backgroundImage = "";
+      bannerEl.style.background = "linear-gradient(135deg, #5865f2 0%, #8b5cf6 100%)";
+      return;
+    }
+    bannerEl.style.backgroundImage = "";
+    bannerEl.style.background = "var(--bg-hover)";
+    void fetchImageAsDataUrl(resolved).then((dataUrl) => {
+      if (bannerEl === null || requestId !== bannerRequestSeq) {
+        return;
+      }
+      if (dataUrl === null || dataUrl.trim() === "") {
+        bannerEl.style.backgroundImage = "";
+        bannerEl.style.background = "linear-gradient(135deg, #5865f2 0%, #8b5cf6 100%)";
+        return;
+      }
+      bannerEl.style.backgroundImage = `url("${dataUrl}")`;
+      bannerEl.style.backgroundSize = "cover";
+      bannerEl.style.backgroundPosition = "center";
+    }).catch(() => {
+      if (bannerEl !== null && requestId === bannerRequestSeq) {
+        bannerEl.style.backgroundImage = "";
+        bannerEl.style.background = "linear-gradient(135deg, #5865f2 0%, #8b5cf6 100%)";
+      }
+    });
     return;
   }
   bannerEl.style.backgroundImage = "";

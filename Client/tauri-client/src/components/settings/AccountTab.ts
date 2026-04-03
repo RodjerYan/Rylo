@@ -5,7 +5,9 @@
  */
 
 import { createElement, appendChildren, setText, clearChildren } from "@lib/dom";
-import type { UserStatus } from "@lib/types";
+import { createIcon } from "@lib/icons";
+import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
+import type { DefaultAvatarCategoryResponse, UserStatus } from "@lib/types";
 import { authStore } from "@stores/auth.store";
 import type { SettingsOverlayOptions } from "../SettingsOverlay";
 import { loadPref, savePref } from "./helpers";
@@ -18,6 +20,8 @@ interface ProfileCardResult {
   readonly card: HTMLDivElement;
   readonly banner: HTMLDivElement;
   readonly avatarLarge: HTMLDivElement;
+  readonly avatarEditBtn: HTMLButtonElement;
+  readonly bannerEditBtn: HTMLButtonElement;
   readonly headerName: HTMLDivElement;
   readonly headerId: HTMLDivElement;
   readonly usernameValue: HTMLDivElement;
@@ -39,12 +43,27 @@ interface ProfileCardModel {
 function buildProfileCard(model: ProfileCardModel): ProfileCardResult {
   const card = createElement("div", { class: "account-card" });
   const banner = createElement("div", { class: "account-banner" });
+  const bannerEditBtn = createElement("button", {
+    class: "account-media-edit-btn account-banner-edit-btn",
+    type: "button",
+    "aria-label": "Изменить обложку",
+    title: "Изменить обложку",
+  }) as HTMLButtonElement;
+  bannerEditBtn.appendChild(createIcon("pencil", 16));
+  banner.appendChild(bannerEditBtn);
 
   // Avatar overlapping the banner
-  const avatarWrap = createElement("div", { class: "account-avatar-wrap" });
+  const avatarWrap = createElement("div", { class: "account-avatar-wrap account-media-editable" });
   const avatarLarge = createElement("div", { class: "account-avatar-large" });
   const statusDot = createElement("div", { class: "account-status-dot" });
-  appendChildren(avatarWrap, avatarLarge, statusDot);
+  const avatarEditBtn = createElement("button", {
+    class: "account-media-edit-btn account-avatar-edit-btn",
+    type: "button",
+    "aria-label": "Изменить аватар",
+    title: "Изменить аватар",
+  }) as HTMLButtonElement;
+  avatarEditBtn.appendChild(createIcon("pencil", 14));
+  appendChildren(avatarWrap, avatarLarge, statusDot, avatarEditBtn);
 
   // Header row
   const accountHeader = createElement("div", { class: "account-header" });
@@ -75,6 +94,8 @@ function buildProfileCard(model: ProfileCardModel): ProfileCardResult {
     card,
     banner,
     avatarLarge,
+    avatarEditBtn,
+    bannerEditBtn,
     headerName,
     headerId,
     usernameValue,
@@ -85,23 +106,77 @@ function buildProfileCard(model: ProfileCardModel): ProfileCardResult {
 
 function applyProfileAvatar(target: HTMLDivElement, avatarUrl: string | null, username: string): void {
   clearChildren(target);
+  const fallbackLetter = username.charAt(0).toUpperCase() || "?";
+  const requestToken = String(Date.now() + Math.random());
+  target.dataset.avatarRequestToken = requestToken;
+
   if (avatarUrl !== null && avatarUrl.trim() !== "") {
-    const img = createElement("img", {
-      src: avatarUrl,
-      alt: username,
-      style: "width:100%;height:100%;border-radius:50%;object-fit:cover;",
+    const resolvedUrl = resolveServerUrl(avatarUrl);
+    if (!isSafeUrl(resolvedUrl)) {
+      setText(target, fallbackLetter);
+      return;
+    }
+    const placeholder = createElement("div", { class: "account-avatar-loading" }, "...");
+    target.appendChild(placeholder);
+    void fetchImageAsDataUrl(resolvedUrl).then((dataUrl) => {
+      if (target.dataset.avatarRequestToken !== requestToken) {
+        return;
+      }
+      clearChildren(target);
+      if (dataUrl !== null && dataUrl.trim() !== "") {
+        const img = createElement("img", {
+          src: dataUrl,
+          alt: username,
+          style: "width:100%;height:100%;border-radius:50%;object-fit:cover;",
+        });
+        target.appendChild(img);
+        return;
+      }
+      setText(target, fallbackLetter);
+    }).catch(() => {
+      if (target.dataset.avatarRequestToken !== requestToken) {
+        return;
+      }
+      clearChildren(target);
+      setText(target, fallbackLetter);
     });
-    target.appendChild(img);
     return;
   }
-  setText(target, username.charAt(0).toUpperCase() || "?");
+  setText(target, fallbackLetter);
 }
 
 function applyProfileBanner(target: HTMLDivElement, bannerUrl: string | null): void {
+  const requestToken = String(Date.now() + Math.random());
+  target.dataset.bannerRequestToken = requestToken;
+
   if (bannerUrl !== null && bannerUrl.trim() !== "") {
-    target.style.backgroundImage = `url("${bannerUrl}")`;
-    target.style.backgroundSize = "cover";
-    target.style.backgroundPosition = "center";
+    const resolvedUrl = resolveServerUrl(bannerUrl);
+    if (!isSafeUrl(resolvedUrl)) {
+      target.style.backgroundImage = "";
+      target.style.background = "var(--accent)";
+      return;
+    }
+    target.style.backgroundImage = "";
+    target.style.background = "var(--bg-hover)";
+    void fetchImageAsDataUrl(resolvedUrl).then((dataUrl) => {
+      if (target.dataset.bannerRequestToken !== requestToken) {
+        return;
+      }
+      if (dataUrl !== null && dataUrl.trim() !== "") {
+        target.style.backgroundImage = `url("${dataUrl}")`;
+        target.style.backgroundSize = "cover";
+        target.style.backgroundPosition = "center";
+        return;
+      }
+      target.style.backgroundImage = "";
+      target.style.background = "var(--accent)";
+    }).catch(() => {
+      if (target.dataset.bannerRequestToken !== requestToken) {
+        return;
+      }
+      target.style.backgroundImage = "";
+      target.style.background = "var(--accent)";
+    });
     return;
   }
   target.style.backgroundImage = "";
@@ -655,6 +730,8 @@ export function buildAccountTab(
     card,
     banner: bannerEl,
     avatarLarge,
+    avatarEditBtn,
+    bannerEditBtn,
     headerName,
     headerId,
     usernameValue,
@@ -703,8 +780,13 @@ export function buildAccountTab(
     }
     setText(usernameError, "");
     void options.onUpdateProfile({ username: newName }).then(() => {
-      setText(headerName, newName);
-      setText(usernameValue, newName);
+      const latestUser = authStore.getState().user;
+      const effectiveName = latestUser?.username?.trim() !== ""
+        ? latestUser?.username ?? newName
+        : newName;
+      setText(headerName, effectiveName);
+      setText(usernameValue, effectiveName);
+      applyProfileAvatar(avatarLarge, latestUser?.avatar ?? avatar, effectiveName);
       editForm.style.display = "none";
     }).catch((err: unknown) => {
       setText(usernameError, err instanceof Error ? err.message : "Не удалось обновить имя пользователя.");
@@ -713,125 +795,112 @@ export function buildAccountTab(
 
   section.appendChild(editForm);
 
-  const mediaSection = createElement("div", { class: "setting-row", style: "display:flex;flex-direction:column;gap:8px;margin-bottom:16px" });
-  const mediaTitle = createElement("div", { class: "account-field-label" }, "Оформление профиля");
-  const mediaButtons = createElement("div", { style: "display:flex;gap:8px;flex-wrap:wrap;" });
-  const uploadAvatarBtn = createElement("button", { class: "ac-btn", type: "button", style: "margin-left:0;" }, "Загрузить аватар");
-  const uploadBannerBtn = createElement("button", { class: "ac-btn", type: "button", style: "margin-left:0;" }, "Загрузить обложку");
-  const mediaInfo = createElement("div", { style: "color:var(--text-muted);font-size:12px;" }, "Изображения сохраняются в вашем профиле на Яндекс Диске.");
-  const mediaError = createElement("div", { style: "color:var(--red);font-size:13px;" });
-  const avatarInput = createElement("input", { type: "file", accept: "image/*", style: "display:none;" }) as HTMLInputElement;
-  const bannerInput = createElement("input", { type: "file", accept: "image/*", style: "display:none;" }) as HTMLInputElement;
-  const defaultAvatarsSection = createElement("div", { class: "account-default-avatars" });
-  const defaultAvatarsTitle = createElement("div", { class: "account-field-label" }, "Стандартные аватары");
-  const defaultAvatarsInfo = createElement("div", { class: "account-default-avatars-info" }, "Категории берутся из названий папок в каталоге Avatars.");
-  const defaultAvatarsError = createElement("div", { class: "account-default-avatars-error" });
-  const defaultAvatarsState = createElement("div", { class: "account-default-avatars-state" }, "Загрузка списка стандартных аватаров...");
-  const defaultAvatarsGroups = createElement("div", { class: "account-default-avatars-groups" });
-  appendChildren(defaultAvatarsSection, defaultAvatarsTitle, defaultAvatarsInfo, defaultAvatarsError, defaultAvatarsState, defaultAvatarsGroups);
+  const mediaError = createElement("div", { class: "account-media-inline-error" });
+  section.appendChild(mediaError);
 
   let mediaUploadInProgress = false;
   let defaultAvatarSelectionInProgress = false;
-
-  function setDefaultAvatarButtonsDisabled(disabled: boolean): void {
-    const buttons = defaultAvatarsGroups.querySelectorAll(".account-default-avatar-item");
-    for (const btn of buttons) {
-      (btn as HTMLButtonElement).disabled = disabled;
-    }
-  }
+  let cachedDefaultAvatarCategories: readonly DefaultAvatarCategoryResponse[] | null = null;
+  let defaultCatalogPromise: Promise<readonly DefaultAvatarCategoryResponse[]> | null = null;
 
   function syncMediaControlsAvailability(): void {
     const uploadDisabledByFeature = options.onUploadProfileMedia === undefined;
     const busy = mediaUploadInProgress || defaultAvatarSelectionInProgress;
-    uploadAvatarBtn.disabled = uploadDisabledByFeature || busy;
-    uploadBannerBtn.disabled = uploadDisabledByFeature || busy;
-
-    const defaultDisabledByFeature =
-      options.onListDefaultAvatars === undefined ||
-      options.onSelectDefaultAvatar === undefined;
-    setDefaultAvatarButtonsDisabled(defaultDisabledByFeature || busy);
+    avatarEditBtn.disabled = uploadDisabledByFeature || busy;
+    bannerEditBtn.disabled = uploadDisabledByFeature || busy;
   }
 
-  async function selectDefaultAvatar(category: string, avatarName: string): Promise<void> {
-    if (options.onSelectDefaultAvatar === undefined) {
-      setText(defaultAvatarsError, "Выбор стандартного аватара недоступен.");
-      return;
-    }
-    if (defaultAvatarSelectionInProgress) {
-      return;
-    }
-
-    defaultAvatarSelectionInProgress = true;
-    setText(defaultAvatarsError, "");
-    setText(mediaError, "");
-    syncMediaControlsAvailability();
-
-    try {
-      const updated = await options.onSelectDefaultAvatar(category, avatarName);
-      const updatedName = updated.username.trim();
-      const effectiveName = updatedName !== "" ? updatedName : (authStore.getState().user?.username ?? username);
-      const updatedAvatar = updated.avatar ?? null;
-      const latestProfileId = updated.profile_id ?? updated.id ?? profileId;
-
-      setText(headerName, effectiveName);
-      setText(usernameValue, effectiveName);
-      setText(headerId, `ID: ${latestProfileId}`);
-      applyProfileAvatar(avatarLarge, updatedAvatar, effectiveName);
-    } catch (err: unknown) {
-      setText(defaultAvatarsError, err instanceof Error ? err.message : "Не удалось выбрать стандартный аватар.");
-    } finally {
-      defaultAvatarSelectionInProgress = false;
-      syncMediaControlsAvailability();
-    }
+  function clampNumber(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
   }
 
-  function renderDefaultAvatarGroups(categories: readonly { name: string; avatars: readonly { name: string; preview_url: string }[] }[]): void {
-    clearChildren(defaultAvatarsGroups);
-    setText(defaultAvatarsError, "");
+  function buildModalShell(title: string): {
+    overlay: HTMLDivElement;
+    modal: HTMLDivElement;
+    body: HTMLDivElement;
+    close: () => void;
+  } {
+    const overlay = createElement("div", { class: "account-media-modal-overlay" });
+    const modal = createElement("div", { class: "account-media-modal" });
+    const header = createElement("div", { class: "account-media-modal-header" });
+    const titleEl = createElement("div", { class: "account-media-modal-title" }, title);
+    const closeBtn = createElement("button", {
+      class: "account-media-modal-close",
+      type: "button",
+      "aria-label": "Закрыть",
+    }) as HTMLButtonElement;
+    closeBtn.appendChild(createIcon("x", 16));
+    const body = createElement("div", { class: "account-media-modal-body" });
 
-    if (categories.length === 0) {
-      setText(defaultAvatarsState, "В каталоге Avatars пока нет доступных изображений.");
-      return;
-    }
-
-    defaultAvatarsState.textContent = "";
-    defaultAvatarsState.style.display = "none";
-
-    for (const category of categories) {
-      const group = createElement("div", { class: "account-default-avatar-group" });
-      const groupTitle = createElement("div", { class: "account-default-avatar-group-title" }, category.name);
-      const grid = createElement("div", { class: "account-default-avatar-grid" });
-
-      for (const avatarEntry of category.avatars) {
-        const button = createElement("button", {
-          class: "account-default-avatar-item",
-          type: "button",
-          title: `${category.name}: ${avatarEntry.name}`,
-        }) as HTMLButtonElement;
-        const image = createElement("img", {
-          class: "account-default-avatar-image",
-          src: avatarEntry.preview_url,
-          alt: avatarEntry.name,
-          loading: "lazy",
-        }) as HTMLImageElement;
-        const label = createElement("div", { class: "account-default-avatar-name" }, avatarEntry.name);
-
-        image.addEventListener("error", () => {
-          image.style.display = "none";
-        }, { signal });
-        button.addEventListener("click", () => {
-          void selectDefaultAvatar(category.name, avatarEntry.name);
-        }, { signal });
-
-        appendChildren(button, image, label);
-        grid.appendChild(button);
+    const escHandler = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        close();
       }
+    };
 
-      appendChildren(group, groupTitle, grid);
-      defaultAvatarsGroups.appendChild(group);
+    const close = (): void => {
+      document.removeEventListener("keydown", escHandler);
+      overlay.remove();
+    };
+
+    closeBtn.addEventListener("click", close, { signal });
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        close();
+      }
+    }, { signal });
+
+    appendChildren(header, titleEl, closeBtn);
+    appendChildren(modal, header, body);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    document.addEventListener("keydown", escHandler);
+    signal.addEventListener("abort", close, { once: true });
+
+    return { overlay, modal, body, close };
+  }
+
+  function syncProfilePreviewWithStore(fallback?: {
+    username?: string;
+    avatar?: string | null;
+    banner?: string | null;
+    profileId?: number;
+  }): void {
+    const latestUser = authStore.getState().user;
+    const latestName = latestUser?.username?.trim() !== ""
+      ? latestUser?.username ?? username
+      : (fallback?.username ?? username);
+    const latestAvatar = latestUser?.avatar ?? fallback?.avatar ?? avatar;
+    const latestBanner = latestUser?.banner ?? fallback?.banner ?? banner;
+    const latestProfileId = latestUser?.profile_id
+      ?? latestUser?.id
+      ?? fallback?.profileId
+      ?? profileId;
+
+    setText(headerName, latestName);
+    setText(usernameValue, latestName);
+    setText(headerId, `ID: ${latestProfileId}`);
+    applyProfileAvatar(avatarLarge, latestAvatar, latestName);
+    applyProfileBanner(bannerEl, latestBanner);
+  }
+
+  async function ensureDefaultAvatarCatalog(): Promise<readonly DefaultAvatarCategoryResponse[]> {
+    if (cachedDefaultAvatarCategories !== null) {
+      return cachedDefaultAvatarCategories;
     }
-
-    syncMediaControlsAvailability();
+    if (options.onListDefaultAvatars === undefined) {
+      return [];
+    }
+    if (defaultCatalogPromise !== null) {
+      return defaultCatalogPromise;
+    }
+    defaultCatalogPromise = options.onListDefaultAvatars().then((categories) => {
+      cachedDefaultAvatarCategories = categories;
+      return categories;
+    }).finally(() => {
+      defaultCatalogPromise = null;
+    });
+    return defaultCatalogPromise;
   }
 
   async function uploadAndApplyProfileMedia(kind: "avatar" | "banner", file: File): Promise<void> {
@@ -839,79 +908,487 @@ export function buildAccountTab(
       setText(mediaError, "Загрузка медиа недоступна на этом экране.");
       return;
     }
-    const originalAvatarText = uploadAvatarBtn.textContent ?? "";
-    const originalBannerText = uploadBannerBtn.textContent ?? "";
     mediaUploadInProgress = true;
-    syncMediaControlsAvailability();
     setText(mediaError, "");
-    if (kind === "avatar") {
-      setText(uploadAvatarBtn, "Загрузка...");
-    } else {
-      setText(uploadBannerBtn, "Загрузка...");
-    }
+    syncMediaControlsAvailability();
     try {
       const uploaded = await options.onUploadProfileMedia(file);
       if (kind === "avatar") {
         await options.onUpdateProfile({ avatar: uploaded.url });
-        const latestName = authStore.getState().user?.username ?? username;
-        applyProfileAvatar(avatarLarge, uploaded.url, latestName);
+        syncProfilePreviewWithStore({ avatar: uploaded.url });
       } else {
         await options.onUpdateProfile({ banner: uploaded.url });
-        applyProfileBanner(bannerEl, uploaded.url);
+        syncProfilePreviewWithStore({ banner: uploaded.url });
       }
-      const latestUser = authStore.getState().user;
-      const latestProfileId = latestUser?.profile_id ?? latestUser?.id ?? profileId;
-      setText(headerId, `ID: ${latestProfileId}`);
     } catch (err: unknown) {
       setText(mediaError, err instanceof Error ? err.message : "Не удалось загрузить изображение профиля.");
+      throw err;
     } finally {
       mediaUploadInProgress = false;
-      setText(uploadAvatarBtn, originalAvatarText);
-      setText(uploadBannerBtn, originalBannerText);
       syncMediaControlsAvailability();
     }
   }
 
-  uploadAvatarBtn.addEventListener("click", () => avatarInput.click(), { signal });
-  uploadBannerBtn.addEventListener("click", () => bannerInput.click(), { signal });
-  avatarInput.addEventListener("change", () => {
-    const file = avatarInput.files?.[0];
-    if (file !== undefined) {
-      void uploadAndApplyProfileMedia("avatar", file);
+  async function selectDefaultAvatar(category: string, avatarName: string): Promise<void> {
+    if (options.onSelectDefaultAvatar === undefined) {
+      setText(mediaError, "Выбор стандартного аватара недоступен.");
+      return;
     }
-    avatarInput.value = "";
-  }, { signal });
-  bannerInput.addEventListener("change", () => {
-    const file = bannerInput.files?.[0];
-    if (file !== undefined) {
-      void uploadAndApplyProfileMedia("banner", file);
+    if (defaultAvatarSelectionInProgress) {
+      return;
     }
-    bannerInput.value = "";
-  }, { signal });
 
-  appendChildren(mediaButtons, uploadAvatarBtn, uploadBannerBtn);
-  if (options.onUploadProfileMedia === undefined && options.onSelectDefaultAvatar === undefined) {
-    setText(mediaInfo, "Загрузка изображений профиля временно недоступна.");
+    defaultAvatarSelectionInProgress = true;
+    setText(mediaError, "");
+    syncMediaControlsAvailability();
+    try {
+      const updated = await options.onSelectDefaultAvatar(category, avatarName);
+      syncProfilePreviewWithStore({
+        username: updated.username,
+        avatar: updated.avatar ?? null,
+        banner: updated.banner ?? null,
+        profileId: updated.profile_id ?? updated.id,
+      });
+    } catch (err: unknown) {
+      setText(mediaError, err instanceof Error ? err.message : "Не удалось выбрать стандартный аватар.");
+      throw err;
+    } finally {
+      defaultAvatarSelectionInProgress = false;
+      syncMediaControlsAvailability();
+    }
   }
-  appendChildren(mediaSection, mediaTitle, mediaButtons, mediaInfo, mediaError, defaultAvatarsSection, avatarInput, bannerInput);
-  section.appendChild(mediaSection);
 
-  if (options.onListDefaultAvatars === undefined || options.onSelectDefaultAvatar === undefined) {
-    setText(defaultAvatarsState, "Каталог стандартных аватаров недоступен на этом экране.");
-  } else {
-    void options.onListDefaultAvatars().then((categories) => {
-      if (signal.aborted) {
-        return;
+  function openCropModal(kind: "avatar" | "banner"): void {
+    const title = kind === "avatar" ? "Изменить аватар" : "Изменить обложку";
+    const modalShell = buildModalShell(title);
+    const modalSignal = new AbortController();
+    const closeModal = (): void => {
+      if (objectUrl !== null) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
       }
-      renderDefaultAvatarGroups(categories);
-    }).catch((err: unknown) => {
-      if (signal.aborted) {
-        return;
-      }
-      setText(defaultAvatarsState, "Не удалось загрузить каталог стандартных аватаров.");
-      setText(defaultAvatarsError, err instanceof Error ? err.message : "Ошибка загрузки каталога аватаров.");
+      modalSignal.abort();
+      modalShell.close();
+    };
+
+    const isAvatar = kind === "avatar";
+    const previewWidth = isAvatar ? 280 : 520;
+    const previewHeight = isAvatar ? 280 : 174;
+    const outputWidth = isAvatar ? 640 : 1600;
+    const outputHeight = isAvatar ? 640 : 534;
+
+    const description = createElement("div", { class: "account-media-modal-note" },
+      isAvatar
+        ? "Перетащите изображение и используйте колесо мыши или ползунок для масштабирования."
+        : "Выберите обложку, затем сдвиньте и приблизьте нужную часть.");
+    const pickerRow = createElement("div", { class: "account-media-picker-row" });
+    const pickFileBtn = createElement("button", {
+      class: "ac-btn",
+      type: "button",
+      style: "margin-left:0;",
+    }, "Выбрать изображение");
+    const fileName = createElement("div", { class: "account-media-file-name" }, "Файл не выбран");
+    appendChildren(pickerRow, pickFileBtn, fileName);
+
+    const hiddenInput = createElement("input", { type: "file", accept: "image/*", style: "display:none;" }) as HTMLInputElement;
+    const stageWrap = createElement("div", {
+      class: `account-crop-stage-wrap${isAvatar ? " avatar" : " banner"}`,
+      style: `width:${previewWidth}px;height:${previewHeight}px;`,
     });
+    const stageCanvas = createElement("canvas", {
+      class: "account-crop-stage-canvas",
+      width: String(previewWidth),
+      height: String(previewHeight),
+    }) as HTMLCanvasElement;
+    stageWrap.appendChild(stageCanvas);
+
+    const controlsRow = createElement("div", { class: "account-crop-controls" });
+    const zoomLabel = createElement("div", { class: "account-crop-zoom-label" }, "Масштаб");
+    const zoomInput = createElement("input", {
+      class: "settings-slider",
+      type: "range",
+      min: "1",
+      max: "1",
+      step: "0.001",
+      value: "1",
+    }) as HTMLInputElement;
+    const zoomValue = createElement("div", { class: "slider-val" }, "100%");
+    appendChildren(controlsRow, zoomLabel, zoomInput, zoomValue);
+
+    const modalError = createElement("div", { class: "account-media-modal-error" });
+    const actionRow = createElement("div", { class: "account-media-modal-actions" });
+    const cancelBtn = createElement("button", { class: "ac-btn", type: "button", style: "background:var(--bg-active);margin-left:0;" }, "Отмена");
+    const saveBtn = createElement("button", { class: "ac-btn", type: "button", style: "margin-left:0;" }, "Сохранить");
+    saveBtn.disabled = true;
+    appendChildren(actionRow, cancelBtn, saveBtn);
+    appendChildren(modalShell.body, description, pickerRow, stageWrap, controlsRow, modalError, actionRow, hiddenInput);
+
+    let objectUrl: string | null = null;
+    let sourceImage: HTMLImageElement | null = null;
+    let zoom = 1;
+    let minZoom = 1;
+    let maxZoom = 1;
+    let offsetX = 0;
+    let offsetY = 0;
+    let dragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragBaseX = 0;
+    let dragBaseY = 0;
+
+    const context = stageCanvas.getContext("2d");
+    if (context === null) {
+      setText(modalError, "Не удалось создать редактор изображения.");
+      pickFileBtn.disabled = true;
+      saveBtn.disabled = true;
+      return;
+    }
+    const stageContext = context;
+
+    function renderStage(): void {
+      stageContext.clearRect(0, 0, previewWidth, previewHeight);
+      stageContext.fillStyle = "rgba(0,0,0,0.15)";
+      stageContext.fillRect(0, 0, previewWidth, previewHeight);
+      if (sourceImage === null) {
+        stageContext.fillStyle = "#9da3af";
+        stageContext.font = "15px DM Sans";
+        stageContext.textAlign = "center";
+        stageContext.fillText("Предпросмотр", previewWidth / 2, previewHeight / 2);
+        return;
+      }
+      stageContext.imageSmoothingEnabled = true;
+      stageContext.imageSmoothingQuality = "high";
+      stageContext.drawImage(
+        sourceImage,
+        offsetX,
+        offsetY,
+        sourceImage.naturalWidth * zoom,
+        sourceImage.naturalHeight * zoom,
+      );
+    }
+
+    function clampOffsets(): void {
+      if (sourceImage === null) {
+        offsetX = 0;
+        offsetY = 0;
+        return;
+      }
+      const scaledWidth = sourceImage.naturalWidth * zoom;
+      const scaledHeight = sourceImage.naturalHeight * zoom;
+      const minX = previewWidth - scaledWidth;
+      const minY = previewHeight - scaledHeight;
+      offsetX = clampNumber(offsetX, minX, 0);
+      offsetY = clampNumber(offsetY, minY, 0);
+    }
+
+    function updateZoomDisplay(): void {
+      if (minZoom <= 0) {
+        setText(zoomValue, "100%");
+        return;
+      }
+      const percent = Math.round((zoom / minZoom) * 100);
+      setText(zoomValue, `${percent}%`);
+    }
+
+    function setZoom(newZoom: number, focusX: number, focusY: number): void {
+      if (sourceImage === null) {
+        return;
+      }
+      const clamped = clampNumber(newZoom, minZoom, maxZoom);
+      if (Math.abs(clamped - zoom) < 0.0001) {
+        return;
+      }
+      const ratio = clamped / zoom;
+      offsetX = focusX - (focusX - offsetX) * ratio;
+      offsetY = focusY - (focusY - offsetY) * ratio;
+      zoom = clamped;
+      clampOffsets();
+      zoomInput.value = String(zoom);
+      updateZoomDisplay();
+      renderStage();
+    }
+
+    function loadFile(file: File): void {
+      if (objectUrl !== null) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+      objectUrl = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => {
+        sourceImage = image;
+        minZoom = Math.max(previewWidth / image.naturalWidth, previewHeight / image.naturalHeight);
+        maxZoom = Math.max(minZoom * 4, minZoom + 0.2);
+        zoom = minZoom;
+        offsetX = (previewWidth - image.naturalWidth * zoom) / 2;
+        offsetY = (previewHeight - image.naturalHeight * zoom) / 2;
+        zoomInput.min = String(minZoom);
+        zoomInput.max = String(maxZoom);
+        zoomInput.value = String(zoom);
+        clampOffsets();
+        updateZoomDisplay();
+        renderStage();
+        saveBtn.disabled = false;
+      };
+      image.onerror = () => {
+        sourceImage = null;
+        saveBtn.disabled = true;
+        setText(modalError, "Не удалось открыть изображение.");
+        renderStage();
+      };
+      image.src = objectUrl;
+      setText(fileName, file.name);
+      setText(modalError, "");
+    }
+
+    pickFileBtn.addEventListener("click", () => hiddenInput.click(), { signal: modalSignal.signal });
+    hiddenInput.addEventListener("change", () => {
+      const selected = hiddenInput.files?.[0];
+      if (selected !== undefined) {
+        loadFile(selected);
+      }
+      hiddenInput.value = "";
+    }, { signal: modalSignal.signal });
+
+    zoomInput.addEventListener("input", () => {
+      const nextZoom = Number(zoomInput.value);
+      setZoom(nextZoom, previewWidth / 2, previewHeight / 2);
+    }, { signal: modalSignal.signal });
+
+    stageCanvas.addEventListener("wheel", (event) => {
+      if (sourceImage === null) {
+        return;
+      }
+      event.preventDefault();
+      const rect = stageCanvas.getBoundingClientRect();
+      const focusX = event.clientX - rect.left;
+      const focusY = event.clientY - rect.top;
+      const nextZoom = event.deltaY < 0 ? zoom * 1.06 : zoom * 0.94;
+      setZoom(nextZoom, focusX, focusY);
+    }, { signal: modalSignal.signal, passive: false });
+
+    stageCanvas.addEventListener("mousedown", (event) => {
+      if (sourceImage === null) {
+        return;
+      }
+      dragging = true;
+      dragStartX = event.clientX;
+      dragStartY = event.clientY;
+      dragBaseX = offsetX;
+      dragBaseY = offsetY;
+      stageCanvas.classList.add("dragging");
+    }, { signal: modalSignal.signal });
+
+    window.addEventListener("mousemove", (event) => {
+      if (!dragging || sourceImage === null) {
+        return;
+      }
+      const dx = event.clientX - dragStartX;
+      const dy = event.clientY - dragStartY;
+      offsetX = dragBaseX + dx;
+      offsetY = dragBaseY + dy;
+      clampOffsets();
+      renderStage();
+    }, { signal: modalSignal.signal });
+
+    window.addEventListener("mouseup", () => {
+      dragging = false;
+      stageCanvas.classList.remove("dragging");
+    }, { signal: modalSignal.signal });
+
+    cancelBtn.addEventListener("click", closeModal, { signal: modalSignal.signal });
+    saveBtn.addEventListener("click", () => {
+      if (sourceImage === null) {
+        return;
+      }
+      saveBtn.disabled = true;
+      setText(saveBtn, "Сохранение...");
+      const exportCanvas = document.createElement("canvas");
+      exportCanvas.width = outputWidth;
+      exportCanvas.height = outputHeight;
+      const exportCtx = exportCanvas.getContext("2d");
+      if (exportCtx === null) {
+        setText(modalError, "Не удалось сохранить изображение.");
+        saveBtn.disabled = false;
+        setText(saveBtn, "Сохранить");
+        return;
+      }
+
+      const scaleX = outputWidth / previewWidth;
+      const scaleY = outputHeight / previewHeight;
+      exportCtx.imageSmoothingEnabled = true;
+      exportCtx.imageSmoothingQuality = "high";
+      exportCtx.drawImage(
+        sourceImage,
+        offsetX * scaleX,
+        offsetY * scaleY,
+        sourceImage.naturalWidth * zoom * scaleX,
+        sourceImage.naturalHeight * zoom * scaleY,
+      );
+
+      exportCanvas.toBlob((blob) => {
+        if (blob === null) {
+          setText(modalError, "Не удалось сохранить изображение.");
+          saveBtn.disabled = false;
+          setText(saveBtn, "Сохранить");
+          return;
+        }
+        const file = new File([blob], kind === "avatar" ? "avatar.png" : "banner.png", { type: "image/png" });
+        void uploadAndApplyProfileMedia(kind, file).then(() => {
+          closeModal();
+        }).catch(() => {
+          saveBtn.disabled = false;
+          setText(saveBtn, "Сохранить");
+        });
+      }, "image/png", 0.95);
+    }, { signal: modalSignal.signal });
+
+    renderStage();
   }
+
+  function openDefaultAvatarModal(): void {
+    const modalShell = buildModalShell("Стандартные аватары");
+    const modalSignal = new AbortController();
+    const closeModal = (): void => {
+      modalSignal.abort();
+      modalShell.close();
+    };
+    const status = createElement("div", { class: "account-default-avatars-state" }, "Загрузка списка аватаров...");
+    const error = createElement("div", { class: "account-default-avatars-error" });
+    const groups = createElement("div", { class: "account-default-avatars-groups" });
+    appendChildren(modalShell.body, status, error, groups);
+
+    const renderPreview = (target: HTMLDivElement, previewUrl: string): void => {
+      const resolved = resolveServerUrl(previewUrl);
+      if (!isSafeUrl(resolved)) {
+        setText(target, "Нет превью");
+        return;
+      }
+      void fetchImageAsDataUrl(resolved).then((dataUrl) => {
+        if (modalSignal.signal.aborted) {
+          return;
+        }
+        clearChildren(target);
+        if (dataUrl === null || dataUrl.trim() === "") {
+          setText(target, "Нет превью");
+          return;
+        }
+        const image = createElement("img", {
+          class: "account-default-avatar-image",
+          src: dataUrl,
+          alt: "avatar preview",
+        });
+        target.appendChild(image);
+      }).catch(() => {
+        if (!modalSignal.signal.aborted) {
+          setText(target, "Нет превью");
+        }
+      });
+    };
+
+    void ensureDefaultAvatarCatalog().then((categories) => {
+      if (modalSignal.signal.aborted) {
+        return;
+      }
+      clearChildren(groups);
+      setText(error, "");
+      if (categories.length === 0) {
+        setText(status, "В каталоге Avatars пока нет доступных изображений.");
+        return;
+      }
+      status.style.display = "none";
+
+      for (const category of categories) {
+        const group = createElement("div", { class: "account-default-avatar-group" });
+        const groupTitle = createElement("div", { class: "account-default-avatar-group-title" }, category.name);
+        const grid = createElement("div", { class: "account-default-avatar-grid" });
+        for (const avatarEntry of category.avatars) {
+          const button = createElement("button", {
+            class: "account-default-avatar-item",
+            type: "button",
+            title: `${category.name}: ${avatarEntry.name}`,
+          }) as HTMLButtonElement;
+          const previewWrap = createElement("div", { class: "account-default-avatar-preview-wrap" });
+          const label = createElement("div", { class: "account-default-avatar-name" }, avatarEntry.name);
+          renderPreview(previewWrap, avatarEntry.preview_url);
+          button.addEventListener("click", () => {
+            void selectDefaultAvatar(category.name, avatarEntry.name).then(() => {
+              closeModal();
+            }).catch(() => {
+              // Error text already shown under profile card.
+            });
+          }, { signal: modalSignal.signal });
+          appendChildren(button, previewWrap, label);
+          grid.appendChild(button);
+        }
+        appendChildren(group, groupTitle, grid);
+        groups.appendChild(group);
+      }
+    }).catch((err: unknown) => {
+      if (modalSignal.signal.aborted) {
+        return;
+      }
+      setText(status, "Не удалось загрузить стандартные аватары.");
+      setText(error, err instanceof Error ? err.message : "Ошибка загрузки аватаров.");
+    });
+
+    const footer = createElement("div", { class: "account-media-modal-actions" });
+    const closeBtn = createElement("button", {
+      class: "ac-btn",
+      type: "button",
+      style: "background:var(--bg-active);margin-left:0;",
+    }, "Закрыть");
+    closeBtn.addEventListener("click", closeModal, { signal: modalSignal.signal });
+    footer.appendChild(closeBtn);
+    modalShell.body.appendChild(footer);
+  }
+
+  function openAvatarChooserModal(): void {
+    const modalShell = buildModalShell("Выбор аватара");
+    const chooserText = createElement("div", { class: "account-media-modal-note" },
+      "Выберите источник: загрузить свой аватар или взять стандартный из каталога.");
+    const chooserGrid = createElement("div", { class: "account-avatar-choice-grid" });
+    const uploadOwnBtn = createElement("button", {
+      class: "account-avatar-choice-btn",
+      type: "button",
+    }, "Загрузить свой аватар");
+    const chooseStandardBtn = createElement("button", {
+      class: "account-avatar-choice-btn",
+      type: "button",
+    }, "Выбрать стандартный");
+    const closeBtn = createElement("button", {
+      class: "ac-btn",
+      type: "button",
+      style: "background:var(--bg-active);margin-left:0;",
+    }, "Отмена");
+
+    uploadOwnBtn.addEventListener("click", () => {
+      modalShell.close();
+      openCropModal("avatar");
+    }, { signal });
+    chooseStandardBtn.addEventListener("click", () => {
+      modalShell.close();
+      openDefaultAvatarModal();
+    }, { signal });
+    closeBtn.addEventListener("click", () => modalShell.close(), { signal });
+
+    appendChildren(chooserGrid, uploadOwnBtn, chooseStandardBtn);
+    appendChildren(modalShell.body, chooserText, chooserGrid, closeBtn);
+  }
+
+  avatarEditBtn.addEventListener("click", () => {
+    if (avatarEditBtn.disabled) {
+      return;
+    }
+    openAvatarChooserModal();
+  }, { signal });
+
+  bannerEditBtn.addEventListener("click", () => {
+    if (bannerEditBtn.disabled) {
+      return;
+    }
+    openCropModal("banner");
+  }, { signal });
 
   syncMediaControlsAvailability();
 
