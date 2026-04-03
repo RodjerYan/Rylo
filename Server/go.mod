@@ -1,4 +1,4 @@
-﻿module github.com/rylo/server
+module github.com/rylo/server
 
 go 1.25.0
 
@@ -9,7 +9,7 @@ require (
 	github.com/knadh/koanf/providers/env v1.1.0
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/providers/structs v1.0.0
-	github.com/knadh/koanf/v2 v2.3.3
+	github.com/knadh/koanf/v2 v2.3.4
 	github.com/livekit/protocol v1.45.1
 	github.com/livekit/server-sdk-go/v2 v2.16.0
 	github.com/microcosm-cc/bluemonday v1.0.27
