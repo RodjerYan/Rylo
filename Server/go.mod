@@ -1,4 +1,4 @@
-﻿module github.com/rylo/server
+module github.com/rylo/server
 
 go 1.25.0
 
@@ -11,7 +11,7 @@ require (
 	github.com/knadh/koanf/providers/structs v1.0.0
 	github.com/knadh/koanf/v2 v2.3.3
 	github.com/livekit/protocol v1.45.1
-	github.com/livekit/server-sdk-go/v2 v2.16.0
+	github.com/livekit/server-sdk-go/v2 v2.16.1
 	github.com/microcosm-cc/bluemonday v1.0.27
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.49.0
