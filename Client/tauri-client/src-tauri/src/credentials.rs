@@ -51,7 +51,12 @@ fn to_wide(s: &str) -> Vec<u16> {
 /// password". Windows Credential Manager encrypts the blob at rest using
 /// DPAPI, tied to the logged-in Windows user — plaintext is never on disk.
 #[tauri::command]
-pub fn save_credential(host: String, username: String, token: String, password: Option<String>) -> Result<(), String> {
+pub fn save_credential(
+    host: String,
+    username: String,
+    token: String,
+    password: Option<String>,
+) -> Result<(), String> {
     if host.is_empty() {
         return Err("host must not be empty".into());
     }
@@ -90,8 +95,7 @@ pub fn save_credential(host: String, username: String, token: String, password: 
     };
 
     unsafe {
-        CredWriteW(&mut cred, 0)
-            .map_err(|e| format!("CredWriteW failed: {e}"))?;
+        CredWriteW(&mut cred, 0).map_err(|e| format!("CredWriteW failed: {e}"))?;
     }
 
     Ok(())
@@ -109,14 +113,8 @@ pub fn load_credential(host: String) -> Result<Option<CredentialData>, String> {
     let target = target_name(&host);
     let mut pcred: *mut CREDENTIALW = ptr::null_mut();
 
-    let read_result = unsafe {
-        CredReadW(
-            PCWSTR(target.as_ptr()),
-            CRED_TYPE_GENERIC,
-            0,
-            &mut pcred,
-        )
-    };
+    let read_result =
+        unsafe { CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, 0, &mut pcred) };
 
     match read_result {
         Ok(()) => {}
@@ -133,18 +131,16 @@ pub fn load_credential(host: String) -> Result<Option<CredentialData>, String> {
     // parsing fails, otherwise the credential memory leaks.
     let blob = unsafe {
         let cred = &*pcred;
-        let bytes = std::slice::from_raw_parts(
-            cred.CredentialBlob,
-            cred.CredentialBlobSize as usize,
-        )
-        .to_vec();
+        let bytes =
+            std::slice::from_raw_parts(cred.CredentialBlob, cred.CredentialBlobSize as usize)
+                .to_vec();
         CredFree(pcred as *const std::ffi::c_void);
         bytes
     };
 
     // Parse outside the unsafe block — CredFree has already been called.
-    let json_str = String::from_utf8(blob)
-        .map_err(|e| format!("credential blob is not valid UTF-8: {e}"))?;
+    let json_str =
+        String::from_utf8(blob).map_err(|e| format!("credential blob is not valid UTF-8: {e}"))?;
 
     let parsed: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| format!("credential blob is not valid JSON: {e}"))?;
@@ -164,7 +160,11 @@ pub fn load_credential(host: String) -> Result<Option<CredentialData>, String> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    Ok(Some(CredentialData { username, token, password }))
+    Ok(Some(CredentialData {
+        username,
+        token,
+        password,
+    }))
 }
 
 /// Delete a credential from Windows Credential Manager.
@@ -176,13 +176,7 @@ pub fn delete_credential(host: String) -> Result<(), String> {
 
     let target = target_name(&host);
 
-    let delete_result = unsafe {
-        CredDeleteW(
-            PCWSTR(target.as_ptr()),
-            CRED_TYPE_GENERIC,
-            0,
-        )
-    };
+    let delete_result = unsafe { CredDeleteW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, 0) };
 
     match delete_result {
         Ok(()) => Ok(()),
@@ -217,20 +211,14 @@ mod tests {
     #[test]
     fn target_name_empty_host() {
         let result = target_name("");
-        let expected: Vec<u16> = "Rylo/"
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
+        let expected: Vec<u16> = "Rylo/".encode_utf16().chain(std::iter::once(0)).collect();
         assert_eq!(result, expected);
     }
 
     #[test]
     fn to_wide_ascii() {
         let result = to_wide("hello");
-        let expected: Vec<u16> = "hello"
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
+        let expected: Vec<u16> = "hello".encode_utf16().chain(std::iter::once(0)).collect();
         assert_eq!(result, expected);
         // Last element must be null terminator
         assert_eq!(*result.last().unwrap(), 0u16);

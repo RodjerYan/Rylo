@@ -10,13 +10,11 @@ const MAX_SETTINGS_KEY_LEN: usize = 128;
 /// Allowed key prefixes and exact keys for the settings store.
 /// Keys must either match an exact entry or start with an allowed prefix.
 const ALLOWED_SETTINGS_PREFIXES: &[&str] = &[
-    "rylo:",      // rylo:profiles, rylo:settings:*, rylo:recent-emoji
-    "userVolume_",   // per-user volume: userVolume_{userId}
+    "rylo:",       // rylo:profiles, rylo:settings:*, rylo:recent-emoji
+    "userVolume_", // per-user volume: userVolume_{userId}
 ];
 
-const ALLOWED_SETTINGS_EXACT: &[&str] = &[
-    "windowState",
-];
+const ALLOWED_SETTINGS_EXACT: &[&str] = &["windowState"];
 
 fn is_settings_key_allowed(key: &str) -> bool {
     if key.len() > MAX_SETTINGS_KEY_LEN || key.is_empty() {
@@ -25,7 +23,9 @@ fn is_settings_key_allowed(key: &str) -> bool {
     if ALLOWED_SETTINGS_EXACT.contains(&key) {
         return true;
     }
-    ALLOWED_SETTINGS_PREFIXES.iter().any(|prefix| key.starts_with(prefix))
+    ALLOWED_SETTINGS_PREFIXES
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
 }
 
 // ---------------------------------------------------------------------------
@@ -111,10 +111,7 @@ pub fn store_cert_fingerprint(
 }
 
 #[tauri::command]
-pub fn get_cert_fingerprint(
-    app: tauri::AppHandle,
-    host: String,
-) -> Result<Option<String>, String> {
+pub fn get_cert_fingerprint(app: tauri::AppHandle, host: String) -> Result<Option<String>, String> {
     if host.is_empty() {
         return Err("host must not be empty".into());
     }

@@ -1,5 +1,5 @@
 use std::net::{SocketAddr, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -117,23 +117,120 @@ fn prepare_server_workdir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, Str
 }
 
 fn resolve_server_binary<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    let resource_dir = app.path().resource_dir().ok();
+    let current_exe = std::env::current_exe().ok();
+    let dev_server_binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../Server")
+        .join(SERVER_BINARY_NAME);
+
+    resolve_server_binary_from_paths(
+        resource_dir.as_deref(),
+        current_exe.as_deref(),
+        &dev_server_binary,
+    )
+}
+
+fn resolve_server_binary_from_paths(
+    resource_dir: Option<&Path>,
+    current_exe: Option<&Path>,
+    dev_server_binary: &Path,
+) -> Option<PathBuf> {
     let mut candidates = Vec::new();
 
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join(SERVER_BINARY_NAME));
+    if let Some(dir) = resource_dir {
+        append_server_binary_candidates(&mut candidates, dir);
     }
 
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(parent) = current_exe.parent() {
-            candidates.push(parent.join(SERVER_BINARY_NAME));
+    if let Some(exe) = current_exe {
+        if let Some(parent) = exe.parent() {
+            append_server_binary_candidates(&mut candidates, parent);
         }
     }
 
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../Server")
-            .join(SERVER_BINARY_NAME),
-    );
+    push_unique_candidate(&mut candidates, dev_server_binary.to_path_buf());
 
     candidates.into_iter().find(|path| path.exists())
+}
+
+fn append_server_binary_candidates(candidates: &mut Vec<PathBuf>, base_dir: &Path) {
+    let mut current_dir = Some(base_dir.to_path_buf());
+
+    for _ in 0..=4 {
+        let Some(dir) = current_dir.take() else {
+            break;
+        };
+
+        push_unique_candidate(candidates, dir.join(SERVER_BINARY_NAME));
+        push_unique_candidate(candidates, dir.join("Server").join(SERVER_BINARY_NAME));
+
+        current_dir = Some(dir.join("_up_"));
+    }
+}
+
+fn push_unique_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    if !candidates.iter().any(|candidate| candidate == &path) {
+        candidates.push(path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_server_binary_from_paths;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("rylo-server-process-{label}-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn touch(path: &Path) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent dirs");
+        }
+        fs::write(path, b"").expect("write placeholder file");
+    }
+
+    #[test]
+    fn resolves_bundled_server_from_server_subdirectory() {
+        let root = make_temp_dir("server-subdir");
+        let resource_dir = root.join("resources");
+        let server_binary = resource_dir.join("Server").join("chatserver.exe");
+        touch(&server_binary);
+
+        let resolved =
+            resolve_server_binary_from_paths(Some(&resource_dir), None, Path::new("missing"));
+
+        assert_eq!(resolved.as_deref(), Some(server_binary.as_path()));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn resolves_server_from_nested_updater_directory() {
+        let root = make_temp_dir("nested-updater");
+        let exe_dir = root.join("install");
+        let current_exe = exe_dir.join("rylo-client.exe");
+        let server_binary = exe_dir
+            .join("_up_")
+            .join("_up_")
+            .join("_up_")
+            .join("Server")
+            .join("chatserver.exe");
+        touch(&current_exe);
+        touch(&server_binary);
+
+        let resolved =
+            resolve_server_binary_from_paths(None, Some(&current_exe), Path::new("missing"));
+
+        assert_eq!(resolved.as_deref(), Some(server_binary.as_path()));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
 }

@@ -16,8 +16,7 @@ static PTT_RUNNING: AtomicBool = AtomicBool::new(false);
 /// Check if a virtual key is currently held down (non-consuming).
 #[cfg(windows)]
 fn is_key_down(vk: i32) -> bool {
-    let state =
-        unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) };
+    let state = unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) };
     (state as u16 & 0x8000) != 0
 }
 

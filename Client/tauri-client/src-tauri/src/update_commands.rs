@@ -67,10 +67,7 @@ pub async fn check_client_update(
 /// The frontend should call `relaunch()` from @tauri-apps/plugin-process
 /// after this completes.
 #[tauri::command]
-pub async fn download_and_install_update(
-    app: AppHandle,
-    server_url: String,
-) -> Result<(), String> {
+pub async fn download_and_install_update(app: AppHandle, server_url: String) -> Result<(), String> {
     let current_version = app
         .config()
         .version

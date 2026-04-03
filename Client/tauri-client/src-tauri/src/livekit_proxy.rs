@@ -27,10 +27,10 @@
 
 use log::{debug, error, info, warn};
 use ring::digest::{digest, SHA256};
-use std::net::IpAddr;
-use std::sync::Arc;
 use rustls::pki_types::ServerName;
 use serde_json::Value;
+use std::net::IpAddr;
+use std::sync::Arc;
 use tauri::Runtime;
 use tauri_plugin_store::StoreExt;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
@@ -82,7 +82,9 @@ struct PinnedVerifier {
 
 impl PinnedVerifier {
     fn new(expected_fingerprint: String) -> Self {
-        Self { expected_fingerprint }
+        Self {
+            expected_fingerprint,
+        }
     }
 }
 
@@ -156,7 +158,10 @@ impl rustls::client::danger::ServerCertVerifier for PinnedVerifier {
 /// ws_proxy extracts the host from "wss://host/path" which omits port 443.
 /// We normalise by stripping the default ":443" suffix so the keys match.
 fn cert_store_key(remote_host: &str) -> String {
-    remote_host.strip_suffix(":443").unwrap_or(remote_host).to_string()
+    remote_host
+        .strip_suffix(":443")
+        .unwrap_or(remote_host)
+        .to_string()
 }
 
 /// Load the stored certificate fingerprint for a host from the Tauri cert store.
@@ -196,11 +201,17 @@ pub async fn start_livekit_proxy<R: Runtime>(
     // Reuse existing proxy for same host.
     if let Some(port) = inner.port {
         if inner.remote_host == remote_host {
-            debug!("[livekit_proxy] reusing existing proxy on port {} for {}", port, remote_host);
+            debug!(
+                "[livekit_proxy] reusing existing proxy on port {} for {}",
+                port, remote_host
+            );
             return Ok(port);
         }
         // Different host — tear down old proxy.
-        info!("[livekit_proxy] stopping old proxy for {} (switching to {})", inner.remote_host, remote_host);
+        info!(
+            "[livekit_proxy] stopping old proxy for {} (switching to {})",
+            inner.remote_host, remote_host
+        );
         if let Some(tx) = inner.shutdown_tx.take() {
             let _ = tx.send(());
         }
@@ -212,11 +223,12 @@ pub async fn start_livekit_proxy<R: Runtime>(
     // should already be stored. If not, reject — we refuse to connect without
     // a pinned cert.
     let store_key = cert_store_key(&remote_host);
-    let fingerprint = load_stored_fingerprint(&app, &store_key)?
-        .ok_or_else(|| format!(
+    let fingerprint = load_stored_fingerprint(&app, &store_key)?.ok_or_else(|| {
+        format!(
             "no trusted certificate fingerprint for {remote_host}. \
              Connect via WebSocket first to establish TOFU trust."
-        ))?;
+        )
+    })?;
 
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -231,7 +243,10 @@ pub async fn start_livekit_proxy<R: Runtime>(
     let host = remote_host.clone();
     tokio::spawn(run_proxy_loop(listener, host, fingerprint, shutdown_rx));
 
-    info!("[livekit_proxy] proxy started on 127.0.0.1:{} → {}", port, remote_host);
+    info!(
+        "[livekit_proxy] proxy started on 127.0.0.1:{} → {}",
+        port, remote_host
+    );
 
     inner.port = Some(port);
     inner.remote_host = remote_host;
@@ -242,9 +257,7 @@ pub async fn start_livekit_proxy<R: Runtime>(
 
 /// Stop the LiveKit TLS proxy if running.
 #[tauri::command]
-pub async fn stop_livekit_proxy(
-    state: tauri::State<'_, LiveKitProxyState>,
-) -> Result<(), String> {
+pub async fn stop_livekit_proxy(state: tauri::State<'_, LiveKitProxyState>) -> Result<(), String> {
     let mut inner = state.inner.lock().await;
     if let Some(tx) = inner.shutdown_tx.take() {
         let _ = tx.send(());
@@ -356,9 +369,9 @@ async fn handle_connection(
     // ── 3. Connect to remote over TLS ────────────────────────────────────
     let tls_config = rustls::ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(
-            PinnedVerifier::new(pinned_fingerprint.to_string()),
-        ))
+        .with_custom_certificate_verifier(Arc::new(PinnedVerifier::new(
+            pinned_fingerprint.to_string(),
+        )))
         .with_no_client_auth();
 
     let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
@@ -367,9 +380,7 @@ async fn handle_connection(
     // Default to port 443 (standard HTTPS) when no port is specified — the
     // server is typically behind a reverse proxy (nginx) on the standard port.
     let (raw_hostname, _port) = remote_host.rsplit_once(':').unwrap_or((remote_host, "443"));
-    let hostname = raw_hostname
-        .trim_start_matches('[')
-        .trim_end_matches(']');
+    let hostname = raw_hostname.trim_start_matches('[').trim_end_matches(']');
 
     let server_name = if let Ok(ip) = hostname.parse::<IpAddr>() {
         ServerName::IpAddress(ip.into())
@@ -380,7 +391,10 @@ async fn handle_connection(
 
     debug!("[livekit_proxy] connecting TCP to {}", remote_host);
     let tcp = TcpStream::connect(remote_host).await?;
-    debug!("[livekit_proxy] starting TLS handshake with {}", remote_host);
+    debug!(
+        "[livekit_proxy] starting TLS handshake with {}",
+        remote_host
+    );
     let mut tls = connector.connect(server_name, tcp).await?;
     debug!("[livekit_proxy] TLS handshake complete, forwarding traffic");
 
@@ -389,7 +403,10 @@ async fn handle_connection(
     let result = io::copy_bidirectional(&mut local, &mut tls).await;
     match result {
         Ok((to_remote, from_remote)) => {
-            debug!("[livekit_proxy] connection closed: {}B sent, {}B received", to_remote, from_remote);
+            debug!(
+                "[livekit_proxy] connection closed: {}B sent, {}B received",
+                to_remote, from_remote
+            );
         }
         Err(e) => {
             debug!("[livekit_proxy] bidirectional copy ended: {}", e);

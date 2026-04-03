@@ -15,13 +15,14 @@ pub fn register_push_to_talk<R: Runtime>(
     }
 
     let handle = app.clone();
-    app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-        let event_name = match event.state {
-            ShortcutState::Pressed => "ptt-press",
-            ShortcutState::Released => "ptt-release",
-        };
-        let _ = handle.emit(event_name, ());
-    })?;
+    app.global_shortcut()
+        .on_shortcut(shortcut, move |_app, _shortcut, event| {
+            let event_name = match event.state {
+                ShortcutState::Pressed => "ptt-press",
+                ShortcutState::Released => "ptt-release",
+            };
+            let _ = handle.emit(event_name, ());
+        })?;
 
     Ok(())
 }

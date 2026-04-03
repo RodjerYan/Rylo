@@ -51,7 +51,12 @@ struct TofuVerifier {
 impl TofuVerifier {
     fn new() -> (Self, CapturedFingerprint) {
         let fp = Arc::new(std::sync::Mutex::new(None));
-        (Self { captured: fp.clone() }, fp)
+        (
+            Self {
+                captured: fp.clone(),
+            },
+            fp,
+        )
     }
 }
 
@@ -164,18 +169,14 @@ fn tofu_check<R: Runtime>(
             }
             Ok("trusted_first_use".to_string())
         }
-        Some(ref stored_fp) if stored_fp == fingerprint => {
-            Ok("trusted".to_string())
-        }
-        Some(stored_fp) => {
-            Err(format!(
-                "Certificate fingerprint changed for {host}.\n\
+        Some(ref stored_fp) if stored_fp == fingerprint => Ok("trusted".to_string()),
+        Some(stored_fp) => Err(format!(
+            "Certificate fingerprint changed for {host}.\n\
                  Stored:  {stored_fp}\n\
                  Current: {fingerprint}\n\
                  This may indicate a man-in-the-middle attack or a server certificate rotation.\n\
                  Use accept_cert_fingerprint to trust the new certificate."
-            ))
-        }
+        )),
     }
 }
 
@@ -217,20 +218,19 @@ pub async fn ws_connect<R: Runtime>(
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
 
-    let connector =
-        tokio_tungstenite::Connector::Rustls(Arc::new(tls_config));
+    let connector = tokio_tungstenite::Connector::Rustls(Arc::new(tls_config));
 
-    let connect_future = tokio_tungstenite::connect_async_tls_with_config(
-        &url,
-        None,
-        false,
-        Some(connector),
-    );
+    let connect_future =
+        tokio_tungstenite::connect_async_tls_with_config(&url, None, false, Some(connector));
 
     let (ws_stream, _response) = tokio::time::timeout(CONNECT_TIMEOUT, connect_future)
         .await
         .map_err(|_| {
-            error!("[ws_proxy] connect timed out after {}s to {}", CONNECT_TIMEOUT.as_secs(), url);
+            error!(
+                "[ws_proxy] connect timed out after {}s to {}",
+                CONNECT_TIMEOUT.as_secs(),
+                url
+            );
             format!("ws connect timed out after {}s", CONNECT_TIMEOUT.as_secs())
         })?
         .map_err(|e| {
@@ -265,7 +265,10 @@ pub async fn ws_connect<R: Runtime>(
             );
         }
         Err(mismatch_msg) => {
-            warn!("[ws_proxy] TOFU check FAILED for {} — certificate fingerprint mismatch", host);
+            warn!(
+                "[ws_proxy] TOFU check FAILED for {} — certificate fingerprint mismatch",
+                host
+            );
             debug!("[ws_proxy] TOFU detail: {}", mismatch_msg);
             let _ = app.emit(
                 "cert-tofu",
@@ -348,13 +351,11 @@ pub async fn ws_connect<R: Runtime>(
 
 /// Send a text message through the proxy WebSocket.
 #[tauri::command]
-pub async fn ws_send(
-    state: tauri::State<'_, WsState>,
-    message: String,
-) -> Result<(), String> {
+pub async fn ws_send(state: tauri::State<'_, WsState>, message: String) -> Result<(), String> {
     let tx_lock = state.tx.lock().await;
     if let Some(tx) = tx_lock.as_ref() {
-        tx.try_send(message).map_err(|e| format!("ws send failed: {e}"))
+        tx.try_send(message)
+            .map_err(|e| format!("ws send failed: {e}"))
     } else {
         Err("WebSocket not connected".into())
     }
@@ -419,7 +420,10 @@ mod tests {
 
     #[test]
     fn extract_host_with_port() {
-        assert_eq!(extract_host("wss://example.com:8443/chat"), "example.com:8443");
+        assert_eq!(
+            extract_host("wss://example.com:8443/chat"),
+            "example.com:8443"
+        );
     }
 
     #[test]
