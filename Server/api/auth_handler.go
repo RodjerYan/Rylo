@@ -15,6 +15,7 @@ import (
 	"github.com/rylo/server/auth"
 	"github.com/rylo/server/db"
 	"github.com/rylo/server/permissions"
+	"github.com/rylo/server/replication"
 )
 
 // sanitizer strips all HTML from user-supplied strings before storage.
@@ -81,7 +82,7 @@ type totpEnableResponse struct {
 // Rate limiters are applied per-endpoint as specified. trustedProxies is the
 // list of CIDRs whose X-Forwarded-For / X-Real-IP headers are honoured for
 // rate-limiting IP resolution.
-func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, trustedProxies []string) {
+func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, trustedProxies []string, replicator *replication.Replicator) {
 	registerLimiter := limiter
 	loginLimiter := limiter
 	partialStore := auth.NewPartialAuthStore(10 * time.Minute)
@@ -89,7 +90,7 @@ func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, t
 
 	r.Route("/api/v1/auth", func(r chi.Router) {
 		r.With(RateLimitMiddleware(registerLimiter, 3, time.Minute, trustedProxies)).
-			Post("/register", handleRegister(database))
+			Post("/register", handleRegister(database, replicator))
 
 		r.With(RateLimitMiddleware(loginLimiter, 60, time.Minute, trustedProxies)).
 			Post("/login", handleLogin(database, limiter, partialStore, trustedProxies))
@@ -122,7 +123,7 @@ func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, t
 }
 
 // handleRegister processes POST /api/v1/auth/register.
-func handleRegister(database *db.DB) http.HandlerFunc {
+func handleRegister(database *db.DB, replicator *replication.Replicator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		registrationOpen, err := isRegistrationOpen(database)
 		if err != nil {
@@ -205,10 +206,22 @@ func handleRegister(database *db.DB) http.HandlerFunc {
 			return
 		}
 
+		var prepared *replication.PreparedRegistration
+		if replicator != nil && replicator.Enabled() {
+			prepared, err = replicator.PrepareRegistration(r.Context(), req.Username, hash, permissions.MemberRoleID)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, genericAuthError)
+				return
+			}
+		}
+
 		// Atomically consume the invite and create the user so failed
 		// registrations do not burn a valid invite code.
 		uid, err := database.CreateUserWithInvite(req.Username, hash, int(permissions.MemberRoleID), req.InviteCode)
 		if err != nil {
+			if replicator != nil && replicator.Enabled() {
+				replicator.RollbackPreparedRegistration(r.Context(), prepared)
+			}
 			// UNIQUE constraint violation → duplicate username → 400.
 			// Any other DB error → 500.
 			if db.IsUniqueConstraintError(err) {
@@ -223,6 +236,11 @@ func handleRegister(database *db.DB) http.HandlerFunc {
 				})
 			}
 			return
+		}
+		if replicator != nil && replicator.Enabled() {
+			if err := replicator.FinalizePreparedRegistration(prepared); err != nil {
+				slog.Error("failed to finalize remote registration", "username", req.Username, "error", err)
+			}
 		}
 
 		ip := clientIP(r)

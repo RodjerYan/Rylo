@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rylo/server/permissions"
+	"github.com/rylo/server/replication"
 )
 
 // registerChatHandlers registers all chat-related message handlers.
@@ -114,6 +115,7 @@ func (h *Hub) handleChatSend(ctx context.Context, c *Client, reqID string, paylo
 
 	// Link attachments if provided.
 	var attachments []map[string]any
+	var replicationAttachments []replication.AttachmentPayload
 	if len(p.Attachments) > 0 {
 		linked, linkErr := h.db.LinkAttachmentsToMessage(msgID, p.Attachments)
 		if linkErr != nil {
@@ -138,6 +140,14 @@ func (h *Hub) handleChatSend(ctx context.Context, c *Client, reqID string, paylo
 						"mime":     ai.Mime,
 						"url":      ai.URL,
 					})
+					replicationAttachments = append(replicationAttachments, replication.AttachmentPayload{
+						ID:       ai.ID,
+						Filename: ai.Filename,
+						Size:     ai.Size,
+						Mime:     ai.Mime,
+						Width:    ai.Width,
+						Height:   ai.Height,
+					})
 				}
 			}
 		}
@@ -159,6 +169,47 @@ func (h *Hub) handleChatSend(ctx context.Context, c *Client, reqID string, paylo
 	}
 
 	slog.Debug("message sent", "user", username, "channel_id", channelID, "msg_id", msgID)
+
+	if h.replicator != nil && h.replicator.Enabled() {
+		replicationPayload := replication.MessagePayload{
+			ChannelKind:    ch.Type,
+			ChannelID:      channelID,
+			ChannelName:    ch.Name,
+			SenderUsername: username,
+			Content:        content,
+			Timestamp:      msg.Timestamp,
+			Attachments:    replicationAttachments,
+		}
+		if isDM {
+			participantIDs, pErr := h.db.GetDMParticipantIDs(channelID)
+			if pErr != nil {
+				slog.Error("ws handleChatSend GetDMParticipantIDs for replication", "err", pErr, "channel_id", channelID)
+				if delErr := h.db.DeleteMessage(msgID, c.userID, true); delErr != nil {
+					slog.Error("ws handleChatSend DeleteMessage (replication cleanup)", "err", delErr, "msg_id", msgID)
+				}
+				c.sendMsg(buildErrorMsg(ErrCodeInternal, "failed to mirror message"))
+				return
+			}
+			for _, pid := range participantIDs {
+				user, userErr := h.db.GetUserByID(pid)
+				if userErr != nil || user == nil {
+					if userErr != nil {
+						slog.Error("ws handleChatSend GetUserByID for replication", "err", userErr, "user_id", pid)
+					}
+					continue
+				}
+				replicationPayload.DMParticipants = append(replicationPayload.DMParticipants, user.Username)
+			}
+		}
+		if err := h.replicator.MirrorMessage(ctx, replicationPayload); err != nil {
+			slog.Error("ws handleChatSend MirrorMessage", "err", err, "msg_id", msgID)
+			if delErr := h.db.DeleteMessage(msgID, c.userID, true); delErr != nil {
+				slog.Error("ws handleChatSend DeleteMessage (replication cleanup)", "err", delErr, "msg_id", msgID)
+			}
+			c.sendMsg(buildErrorMsg(ErrCodeInternal, "failed to mirror message"))
+			return
+		}
+	}
 
 	// Ack sender.
 	c.sendMsg(buildChatSendOK(reqID, msgID, msg.Timestamp))

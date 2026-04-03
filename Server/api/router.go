@@ -14,6 +14,7 @@ import (
 	"github.com/rylo/server/auth"
 	"github.com/rylo/server/config"
 	"github.com/rylo/server/db"
+	"github.com/rylo/server/replication"
 	"github.com/rylo/server/storage"
 	"github.com/rylo/server/updater"
 	"github.com/rylo/server/ws"
@@ -22,7 +23,7 @@ import (
 // NewRouter builds and returns the fully configured HTTP handler, the
 // WebSocket hub (so the caller can call hub.GracefulStop on shutdown), and a
 // cleanup function that stops background goroutines (e.g. rate-limiter cleanup).
-func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.RingBuffer) (http.Handler, *ws.Hub, func()) {
+func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.RingBuffer, replicator *replication.Replicator) (http.Handler, *ws.Hub, func()) {
 	r := chi.NewRouter()
 
 	// Middleware stack.
@@ -66,7 +67,7 @@ func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.Ri
 	})
 
 	// Auth routes: register, login, logout, me.
-	MountAuthRoutes(r, database, limiter, cfg.Server.TrustedProxies)
+	MountAuthRoutes(r, database, limiter, cfg.Server.TrustedProxies, replicator)
 
 	// Invite management routes (require MANAGE_INVITES permission).
 	MountInviteRoutes(r, database)
@@ -82,11 +83,12 @@ func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.Ri
 	if storeErr != nil {
 		slog.Error("failed to create file storage", "error", storeErr)
 	} else {
-		MountUploadRoutes(r, database, store, cfg.Server.AllowedOrigins)
+		MountUploadRoutes(r, database, store, cfg.Server.AllowedOrigins, replicator)
 	}
 
 	// WebSocket hub — WS does its own in-band auth, so no AuthMiddleware here.
 	hub := ws.NewHub(database, limiter)
+	hub.SetReplicator(replicator)
 	getOnlineUsers = func() int { return hub.ClientCount() }
 
 	// Create LiveKit client if voice config is present; voice is disabled on failure.

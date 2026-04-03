@@ -20,6 +20,19 @@ func (d *DB) CreateMessage(channelID, userID int64, content string, replyTo *int
 	return res.LastInsertId()
 }
 
+// CreateMessageWithTimestamp inserts a new message using an explicit timestamp.
+// When timestamp is empty, callers should use CreateMessage instead.
+func (d *DB) CreateMessageWithTimestamp(channelID, userID int64, content string, replyTo *int64, timestamp string) (int64, error) {
+	res, err := d.sqlDB.Exec(
+		`INSERT INTO messages (channel_id, user_id, content, reply_to, timestamp) VALUES (?, ?, ?, ?, ?)`,
+		channelID, userID, content, replyTo, timestamp,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("CreateMessageWithTimestamp: %w", err)
+	}
+	return res.LastInsertId()
+}
+
 // GetMessage returns the message with the given ID, or nil if not found.
 // Soft-deleted messages are returned so callers can broadcast the deletion event.
 func (d *DB) GetMessage(id int64) (*Message, error) {

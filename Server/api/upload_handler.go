@@ -6,6 +6,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/rylo/server/db"
+	"github.com/rylo/server/replication"
 	"github.com/rylo/server/storage"
 )
 
@@ -31,17 +33,17 @@ type uploadResponse struct {
 
 // MountUploadRoutes registers upload and file-serving endpoints.
 // allowedOrigins controls the Access-Control-Allow-Origin header on served files.
-func MountUploadRoutes(r chi.Router, database *db.DB, store *storage.Storage, allowedOrigins []string) {
+func MountUploadRoutes(r chi.Router, database *db.DB, store *storage.Storage, allowedOrigins []string, replicator *replication.Replicator) {
 	// Upload requires authentication and a higher body size limit (100 MB).
 	r.With(
 		AuthMiddleware(database),
 		MaxBodySize(100<<20),
-	).Post("/api/v1/uploads", handleUpload(database, store))
+	).Post("/api/v1/uploads", handleUpload(database, store, replicator))
 	// File serving is public (URLs are unguessable UUIDs).
-	r.Get("/api/v1/files/{id}", handleServeFile(database, store, allowedOrigins))
+	r.Get("/api/v1/files/{id}", handleServeFile(database, store, allowedOrigins, replicator))
 }
 
-func handleUpload(database *db.DB, store *storage.Storage) http.HandlerFunc {
+func handleUpload(database *db.DB, store *storage.Storage, replicator *replication.Replicator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Parse multipart form — 10 MB in memory, rest on disk.
 		if err := r.ParseMultipartForm(10 << 20); err != nil {
@@ -125,6 +127,40 @@ func handleUpload(database *db.DB, store *storage.Storage) http.HandlerFunc {
 			return
 		}
 
+		if replicator != nil && replicator.Enabled() {
+			f, openErr := store.Open(fileID)
+			if openErr != nil {
+				_ = store.Delete(fileID)
+				_ = database.DeleteAttachmentRecord(fileID)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{
+					"error":   "INTERNAL_ERROR",
+					"message": "failed to mirror attachment",
+				})
+				return
+			}
+			data, readErr := io.ReadAll(f)
+			f.Close() //nolint:errcheck
+			var mirrorErr error
+			if readErr == nil {
+				mirrorErr = replicator.MirrorAttachment(r.Context(), fileID, data)
+			}
+			if readErr != nil || mirrorErr != nil {
+				if readErr != nil {
+					slog.Error("failed to read local attachment for mirroring", "id", fileID, "error", readErr)
+				}
+				if mirrorErr != nil {
+					slog.Error("failed to mirror attachment to Yandex Disk", "id", fileID, "error", mirrorErr)
+				}
+				_ = store.Delete(fileID)
+				_ = database.DeleteAttachmentRecord(fileID)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{
+					"error":   "INTERNAL_ERROR",
+					"message": "failed to mirror attachment",
+				})
+				return
+			}
+		}
+
 		slog.Info("file uploaded", "id", fileID, "filename", header.Filename, "size", header.Size, "mime", mime)
 
 		writeJSON(w, http.StatusCreated, uploadResponse{
@@ -139,7 +175,7 @@ func handleUpload(database *db.DB, store *storage.Storage) http.HandlerFunc {
 	}
 }
 
-func handleServeFile(database *db.DB, store *storage.Storage, allowedOrigins []string) http.HandlerFunc {
+func handleServeFile(database *db.DB, store *storage.Storage, allowedOrigins []string, replicator *replication.Replicator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fileID := chi.URLParam(r, "id")
 		if fileID == "" {
@@ -165,8 +201,19 @@ func handleServeFile(database *db.DB, store *storage.Storage, allowedOrigins []s
 		// Open file from storage.
 		f, err := store.Open(att.StoredAs)
 		if err != nil {
-			http.NotFound(w, r)
-			return
+			if replicator == nil || !replicator.Enabled() {
+				http.NotFound(w, r)
+				return
+			}
+			if hydrateErr := replicator.EnsureLocalAttachment(r.Context(), att.StoredAs, store); hydrateErr != nil {
+				http.NotFound(w, r)
+				return
+			}
+			f, err = store.Open(att.StoredAs)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
 		}
 		defer f.Close() //nolint:errcheck
 

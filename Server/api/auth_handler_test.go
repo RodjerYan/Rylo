@@ -41,7 +41,7 @@ func buildAuthRouter(database *db.DB, limiter *auth.RateLimiter) http.Handler {
 
 func buildAuthRouterWithProxies(database *db.DB, limiter *auth.RateLimiter, trustedProxies []string) http.Handler {
 	r := chi.NewRouter()
-	api.MountAuthRoutes(r, database, limiter, trustedProxies)
+	api.MountAuthRoutes(r, database, limiter, trustedProxies, nil)
 	return r
 }
 

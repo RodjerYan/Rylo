@@ -12,6 +12,7 @@ import (
 	"github.com/rylo/server/auth"
 	"github.com/rylo/server/db"
 	"github.com/rylo/server/permissions"
+	"github.com/rylo/server/replication"
 )
 
 // broadcastMsg is an internal message queued for delivery.
@@ -36,6 +37,7 @@ type Hub struct {
 	lkProcess   *LiveKitProcess
 	registry    *HandlerRegistry
 	permChecker *permissions.Checker
+	replicator  *replication.Replicator
 
 	seq       uint64           // atomic monotonic sequence counter
 	replayBuf *EventRingBuffer // recent broadcast events for reconnection replay
@@ -73,6 +75,11 @@ func NewHub(database *db.DB, limiter *auth.RateLimiter) *Hub {
 	}
 	h.refreshSettingsLocked()
 	return h
+}
+
+// SetReplicator wires the optional Yandex Disk replicator into the hub.
+func (h *Hub) SetReplicator(r *replication.Replicator) {
+	h.replicator = r
 }
 
 // getCachedSettings returns server_name and motd, refreshing the cache if stale.

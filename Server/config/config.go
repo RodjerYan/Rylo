@@ -19,12 +19,13 @@ import (
 
 // Config holds the full server configuration.
 type Config struct {
-	Server   ServerConfig   `koanf:"server"`
-	Database DatabaseConfig `koanf:"database"`
-	TLS      TLSConfig      `koanf:"tls"`
-	Upload   UploadConfig   `koanf:"upload"`
-	Voice    VoiceConfig    `koanf:"voice"`
-	GitHub   GitHubConfig   `koanf:"github"`
+	Server     ServerConfig     `koanf:"server"`
+	Database   DatabaseConfig   `koanf:"database"`
+	TLS        TLSConfig        `koanf:"tls"`
+	Upload     UploadConfig     `koanf:"upload"`
+	Voice      VoiceConfig      `koanf:"voice"`
+	GitHub     GitHubConfig     `koanf:"github"`
+	YandexDisk YandexDiskConfig `koanf:"yandex_disk"`
 }
 
 // GitHubConfig holds GitHub API settings for update checking.
@@ -32,14 +33,24 @@ type GitHubConfig struct {
 	Token string `koanf:"token"`
 }
 
+// YandexDiskConfig holds remote replication settings for the shared Yandex Disk.
+type YandexDiskConfig struct {
+	Enabled             bool   `koanf:"enabled"`
+	BaseURL             string `koanf:"base_url"`
+	RootPath            string `koanf:"root_path"`
+	OAuthToken          string `koanf:"oauth_token"`
+	EncryptionKey       string `koanf:"encryption_key"`
+	PollIntervalSeconds int    `koanf:"poll_interval_seconds"`
+}
+
 // VoiceConfig holds LiveKit server connection and voice quality settings.
 type VoiceConfig struct {
-	LiveKitAPIKey    string `koanf:"livekit_api_key"`    // LiveKit API key
-	LiveKitAPISecret string `koanf:"livekit_api_secret"` // LiveKit API secret
-	LiveKitURL       string `koanf:"livekit_url"`        // LiveKit server WebSocket URL (e.g. ws://localhost:7880)
-	LiveKitBinaryPath string `koanf:"livekit_binary"`    // path to livekit-server binary; empty = don't auto-start
-	NodeIP           string `koanf:"node_ip"`            // public IP for WebRTC ICE candidates; empty = auto-detect
-	Quality          string `koanf:"quality"`            // low | medium | high
+	LiveKitAPIKey     string `koanf:"livekit_api_key"`    // LiveKit API key
+	LiveKitAPISecret  string `koanf:"livekit_api_secret"` // LiveKit API secret
+	LiveKitURL        string `koanf:"livekit_url"`        // LiveKit server WebSocket URL (e.g. ws://localhost:7880)
+	LiveKitBinaryPath string `koanf:"livekit_binary"`     // path to livekit-server binary; empty = don't auto-start
+	NodeIP            string `koanf:"node_ip"`            // public IP for WebRTC ICE candidates; empty = auto-detect
+	Quality           string `koanf:"quality"`            // low | medium | high
 }
 
 // ServerConfig holds HTTP server settings.
@@ -82,12 +93,12 @@ func defaults() Config {
 			AllowedOrigins: []string{"*"},
 			TrustedProxies: []string{},
 			AdminAllowedCIDRs: []string{
-				"127.0.0.0/8",     // localhost IPv4
-				"::1/128",         // localhost IPv6
-				"10.0.0.0/8",      // private class A
-				"172.16.0.0/12",   // private class B
-				"192.168.0.0/16",  // private class C
-				"fc00::/7",        // IPv6 unique local
+				"127.0.0.0/8",    // localhost IPv4
+				"::1/128",        // localhost IPv6
+				"10.0.0.0/8",     // private class A
+				"172.16.0.0/12",  // private class B
+				"192.168.0.0/16", // private class C
+				"fc00::/7",       // IPv6 unique local
 			},
 		},
 		Database: DatabaseConfig{
@@ -108,6 +119,13 @@ func defaults() Config {
 			Quality:    "medium",
 		},
 		GitHub: GitHubConfig{},
+		YandexDisk: YandexDiskConfig{
+			Enabled:             true,
+			BaseURL:             "https://webdav.yandex.ru",
+			RootPath:            "/RyloData",
+			OAuthToken:          "y0__xCDkZwgGJjuPyDTpI37FjCA3bCRCM3Vs_NqcknUFmCgLxsJZeFlDh1M",
+			PollIntervalSeconds: 10,
+		},
 	}
 }
 
@@ -150,6 +168,14 @@ voice:
 
 # github:
 #   token: ""  # optional: GitHub API token for higher rate limits (5000 req/hr vs 60)
+
+yandex_disk:
+  enabled: true
+  base_url: "https://webdav.yandex.ru"
+  root_path: "/RyloData"
+  oauth_token: "y0__xCDkZwgGJjuPyDTpI37FjCA3bCRCM3Vs_NqcknUFmCgLxsJZeFlDh1M"
+  encryption_key: ""  # optional 32-byte key (base64/hex/plain); defaults to token-derived key
+  poll_interval_seconds: 10
 `
 
 // Load reads configuration from the given YAML file path, merging with
@@ -209,6 +235,7 @@ func Load(cfgPath string) (*Config, error) {
 	// Apply voice defaults for zero-value fields (koanf loses defaults when
 	// the YAML section is present but fields are commented out / omitted).
 	applyVoiceDefaults(&cfg.Voice)
+	applyYandexDiskDefaults(&cfg.YandexDisk)
 
 	// Warn if using default dev credentials — these are public and insecure.
 	// Clear credentials so downstream consumers (e.g. NewLiveKitClient) see
@@ -265,6 +292,19 @@ func applyVoiceDefaults(v *VoiceConfig) {
 	}
 	if v.Quality == "" {
 		v.Quality = "medium"
+	}
+}
+
+// applyYandexDiskDefaults fills in zero-value Yandex Disk settings.
+func applyYandexDiskDefaults(v *YandexDiskConfig) {
+	if v.BaseURL == "" {
+		v.BaseURL = "https://webdav.yandex.ru"
+	}
+	if v.RootPath == "" {
+		v.RootPath = "/RyloData"
+	}
+	if v.PollIntervalSeconds <= 0 {
+		v.PollIntervalSeconds = 10
 	}
 }
 

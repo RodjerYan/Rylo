@@ -23,6 +23,7 @@ import (
 	"github.com/rylo/server/auth"
 	"github.com/rylo/server/config"
 	"github.com/rylo/server/db"
+	"github.com/rylo/server/replication"
 	"github.com/rylo/server/storage"
 )
 
@@ -106,8 +107,15 @@ func run(log *slog.Logger, logBuf *admin.RingBuffer) error {
 		log.Info("cleared stale voice states")
 	}
 
+	replicator, err := replication.New(cfg.YandexDisk, database)
+	if err != nil {
+		return fmt.Errorf("configuring Yandex Disk replication: %w", err)
+	}
+	replicator.Start()
+	defer replicator.Stop()
+
 	// ── 5. Build HTTP router ───────────────────────────────────────────────
-	router, hub, routerCleanup := api.NewRouter(cfg, database, version, logBuf)
+	router, hub, routerCleanup := api.NewRouter(cfg, database, version, logBuf, replicator)
 	defer routerCleanup()
 
 	// ── 6. Start server ────────────────────────────────────────────────────
@@ -333,4 +341,3 @@ func getOutboundIP() string {
 	addr := conn.LocalAddr().(*net.UDPAddr)
 	return addr.IP.String()
 }
-
