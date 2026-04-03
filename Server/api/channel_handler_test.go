@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
     username    TEXT    NOT NULL UNIQUE COLLATE NOCASE,
     password    TEXT    NOT NULL,
     avatar      TEXT,
+    banner      TEXT,
     role_id     INTEGER NOT NULL DEFAULT 4 REFERENCES roles(id),
     totp_secret TEXT,
     status      TEXT    NOT NULL DEFAULT 'offline',
@@ -89,7 +90,8 @@ CREATE TABLE IF NOT EXISTS messages (
     edited_at  TEXT,
     deleted    INTEGER NOT NULL DEFAULT 0,
     pinned     INTEGER NOT NULL DEFAULT 0,
-    timestamp  TEXT    NOT NULL DEFAULT (datetime('now'))
+    timestamp  TEXT    NOT NULL DEFAULT (datetime('now')),
+    sync_id    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, id DESC);
 

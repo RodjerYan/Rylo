@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS users (
     username    TEXT    NOT NULL UNIQUE COLLATE NOCASE,
     password    TEXT    NOT NULL,
     avatar      TEXT,
+    banner      TEXT,
     role_id     INTEGER NOT NULL DEFAULT 4 REFERENCES roles(id),
     totp_secret TEXT,
     status      TEXT    NOT NULL DEFAULT 'offline',

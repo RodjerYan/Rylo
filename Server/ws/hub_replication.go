@@ -94,6 +94,33 @@ func (h *Hub) HandleReplicatedMessage(msg replication.ImportedMessage) {
 	h.BroadcastToChannel(msg.ChannelID, broadcast)
 }
 
+// HandleReplicatedDelete pushes an imported Yandex Disk deletion to connected clients.
+func (h *Hub) HandleReplicatedDelete(event replication.ImportedDelete) {
+	if event.MessageID <= 0 || event.ChannelID <= 0 {
+		return
+	}
+
+	deletedMsg := buildChatDeleted(event.MessageID, event.ChannelID)
+	if event.ChannelKind == "dm" {
+		participantIDs := event.DMParticipantIDs
+		if len(participantIDs) == 0 {
+			loaded, err := h.db.GetDMParticipantIDs(event.ChannelID)
+			if err != nil {
+				slog.Error("HandleReplicatedDelete GetDMParticipantIDs", "err", err, "channel_id", event.ChannelID)
+				return
+			}
+			participantIDs = loaded
+		}
+
+		for _, pid := range participantIDs {
+			h.SendToUser(pid, deletedMsg)
+		}
+		return
+	}
+
+	h.BroadcastToChannel(event.ChannelID, deletedMsg)
+}
+
 // HandleReplicatedPresence broadcasts imported presence updates from Yandex
 // Disk to currently connected clients.
 func (h *Hub) HandleReplicatedPresence(event replication.ImportedPresence) {

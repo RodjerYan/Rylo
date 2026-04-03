@@ -36,9 +36,10 @@ const (
 )
 
 const (
-	EventTypeRegistration = "registration"
-	EventTypeMessage      = "message"
-	EventTypePresence     = "presence"
+	EventTypeRegistration  = "registration"
+	EventTypeMessage       = "message"
+	EventTypeMessageDelete = "message_delete"
+	EventTypePresence      = "presence"
 )
 
 type InvitePayload struct {
@@ -83,6 +84,7 @@ type AttachmentPayload struct {
 }
 
 type MessagePayload struct {
+	SyncID         string              `json:"sync_id,omitempty"`
 	ChannelKind    string              `json:"channel_kind"`
 	ChannelID      int64               `json:"channel_id"`
 	ChannelName    string              `json:"channel_name"`
@@ -92,6 +94,16 @@ type MessagePayload struct {
 	Timestamp      string              `json:"timestamp"`
 	DMParticipants []string            `json:"dm_participants,omitempty"`
 	Attachments    []AttachmentPayload `json:"attachments,omitempty"`
+}
+
+type MessageDeletePayload struct {
+	SyncID         string   `json:"sync_id,omitempty"`
+	ChannelKind    string   `json:"channel_kind"`
+	ChannelID      int64    `json:"channel_id"`
+	ChannelName    string   `json:"channel_name"`
+	SenderUsername string   `json:"sender_username"`
+	Timestamp      string   `json:"timestamp"`
+	DMParticipants []string `json:"dm_participants,omitempty"`
 }
 
 type PresencePayload struct {
@@ -110,6 +122,13 @@ type ImportedMessage struct {
 	Content          string
 	Timestamp        string
 	OriginServer     string
+	DMParticipantIDs []int64
+}
+
+type ImportedDelete struct {
+	MessageID        int64
+	ChannelID        int64
+	ChannelKind      string
 	DMParticipantIDs []int64
 }
 
@@ -148,6 +167,7 @@ type Replicator struct {
 	pollInterval  time.Duration
 	stopCh        chan struct{}
 	importedHook  func(ImportedMessage)
+	deletedHook   func(ImportedDelete)
 	presenceHook  func(ImportedPresence)
 }
 
@@ -226,6 +246,15 @@ func (r *Replicator) SetImportedMessageHook(hook func(ImportedMessage)) {
 		return
 	}
 	r.importedHook = hook
+}
+
+// SetImportedDeleteHook registers a callback invoked when a remote delete is
+// successfully imported into the local DB.
+func (r *Replicator) SetImportedDeleteHook(hook func(ImportedDelete)) {
+	if r == nil {
+		return
+	}
+	r.deletedHook = hook
 }
 
 // SetImportedPresenceHook registers a callback invoked when a remote presence
@@ -562,6 +591,18 @@ func (r *Replicator) MirrorMessage(ctx context.Context, payload MessagePayload) 
 	return r.db.MarkSyncEventProcessed(eventPath, eventID)
 }
 
+// MirrorMessageDelete publishes a remote delete event after a local message was deleted.
+func (r *Replicator) MirrorMessageDelete(ctx context.Context, payload MessageDeletePayload) error {
+	if !r.Enabled() {
+		return nil
+	}
+	eventID, eventPath, err := r.publishEvent(ctx, EventTypeMessageDelete, payload)
+	if err != nil {
+		return err
+	}
+	return r.db.MarkSyncEventProcessed(eventPath, eventID)
+}
+
 // MirrorPresence publishes a remote presence event.
 func (r *Replicator) MirrorPresence(ctx context.Context, payload PresencePayload) error {
 	if !r.Enabled() {
@@ -660,6 +701,12 @@ func (r *Replicator) applyEvent(ctx context.Context, env EventEnvelope) error {
 			return fmt.Errorf("decode message payload: %w", err)
 		}
 		return r.applyMessage(ctx, payload)
+	case EventTypeMessageDelete:
+		var payload MessageDeletePayload
+		if err := json.Unmarshal(env.Payload, &payload); err != nil {
+			return fmt.Errorf("decode message delete payload: %w", err)
+		}
+		return r.applyMessageDelete(payload)
 	case EventTypePresence:
 		var payload PresencePayload
 		if err := json.Unmarshal(env.Payload, &payload); err != nil {
@@ -728,12 +775,34 @@ func (r *Replicator) applyMessage(ctx context.Context, payload MessagePayload) e
 		return fmt.Errorf("sender %q not imported yet", payload.SenderUsername)
 	}
 
-	channelID, err := r.resolveChannelID(payload)
+	channelID, participantIDs, err := r.resolveChannelReference(
+		payload.ChannelKind,
+		payload.ChannelID,
+		payload.ChannelName,
+		payload.DMParticipants,
+	)
 	if err != nil {
 		return err
 	}
 
-	msgID, err := r.db.CreateMessageWithTimestamp(channelID, sender.ID, payload.Content, nil, payload.Timestamp)
+	if payload.SyncID != "" {
+		existingID, findErr := r.db.FindMessageIDBySyncID(payload.SyncID)
+		if findErr != nil {
+			return findErr
+		}
+		if existingID > 0 {
+			return nil
+		}
+	}
+
+	msgID, err := r.db.CreateMessageWithTimestampAndSyncID(
+		channelID,
+		sender.ID,
+		payload.Content,
+		nil,
+		payload.Timestamp,
+		payload.SyncID,
+	)
 	if err != nil {
 		return err
 	}
@@ -749,10 +818,6 @@ func (r *Replicator) applyMessage(ctx context.Context, payload MessagePayload) e
 		OriginServer:   strings.TrimSpace(payload.OriginServer),
 	}
 	if payload.ChannelKind == "dm" {
-		participantIDs, pErr := r.db.GetDMParticipantIDs(channelID)
-		if pErr != nil {
-			return pErr
-		}
 		imported.DMParticipantIDs = participantIDs
 	}
 
@@ -782,49 +847,101 @@ func (r *Replicator) applyMessage(ctx context.Context, payload MessagePayload) e
 	return nil
 }
 
-func (r *Replicator) resolveChannelID(payload MessagePayload) (int64, error) {
-	if payload.ChannelKind == "dm" {
-		if len(payload.DMParticipants) < 2 {
-			return 0, fmt.Errorf("dm message missing participants")
-		}
-		userA, err := r.db.GetUserByUsername(payload.DMParticipants[0])
+func (r *Replicator) applyMessageDelete(payload MessageDeletePayload) error {
+	channelID, participantIDs, err := r.resolveChannelReference(
+		payload.ChannelKind,
+		payload.ChannelID,
+		payload.ChannelName,
+		payload.DMParticipants,
+	)
+	if err != nil {
+		return err
+	}
+
+	messageID, err := r.findDeletedMessageTarget(channelID, payload)
+	if err != nil {
+		return err
+	}
+	if messageID == 0 {
+		return nil
+	}
+	if err := r.db.SetMessageDeleted(messageID, true); err != nil {
+		return err
+	}
+
+	r.emitImportedDelete(ImportedDelete{
+		MessageID:        messageID,
+		ChannelID:        channelID,
+		ChannelKind:      payload.ChannelKind,
+		DMParticipantIDs: participantIDs,
+	})
+	return nil
+}
+
+func (r *Replicator) findDeletedMessageTarget(channelID int64, payload MessageDeletePayload) (int64, error) {
+	if payload.SyncID != "" {
+		msgID, err := r.db.FindMessageIDBySyncID(payload.SyncID)
 		if err != nil {
 			return 0, err
 		}
-		userB, err := r.db.GetUserByUsername(payload.DMParticipants[1])
+		if msgID > 0 {
+			return msgID, nil
+		}
+	}
+
+	sender, err := r.db.GetUserByUsername(payload.SenderUsername)
+	if err != nil {
+		return 0, err
+	}
+	if sender == nil {
+		return 0, nil
+	}
+	return r.db.FindMessageIDByLegacySignature(channelID, sender.ID, payload.Timestamp)
+}
+
+func (r *Replicator) resolveChannelReference(channelKind string, channelID int64, channelName string, participants []string) (int64, []int64, error) {
+	if channelKind == "dm" {
+		if len(participants) < 2 {
+			return 0, nil, fmt.Errorf("dm message missing participants")
+		}
+		userA, err := r.db.GetUserByUsername(participants[0])
 		if err != nil {
-			return 0, err
+			return 0, nil, err
+		}
+		userB, err := r.db.GetUserByUsername(participants[1])
+		if err != nil {
+			return 0, nil, err
 		}
 		if userA == nil || userB == nil {
-			return 0, fmt.Errorf("dm participants not imported yet")
+			return 0, nil, fmt.Errorf("dm participants not imported yet")
 		}
 		ch, _, err := r.db.GetOrCreateDMChannel(userA.ID, userB.ID)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
-		return ch.ID, nil
+		return ch.ID, []int64{userA.ID, userB.ID}, nil
 	}
 
-	if payload.ChannelID > 0 {
-		ch, err := r.db.GetChannel(payload.ChannelID)
+	if channelID > 0 {
+		ch, err := r.db.GetChannel(channelID)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		if ch != nil {
-			return ch.ID, nil
+			return ch.ID, nil, nil
 		}
 	}
 
 	channels, err := r.db.ListChannels()
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	for _, ch := range channels {
-		if ch.Name == payload.ChannelName && ch.Type == payload.ChannelKind {
-			return ch.ID, nil
+		if ch.Name == channelName && ch.Type == channelKind {
+			return ch.ID, nil, nil
 		}
 	}
-	return 0, fmt.Errorf("channel %q not found locally", payload.ChannelName)
+	return 0, nil, fmt.Errorf("channel %q not found locally", channelName)
 }
 
 func (r *Replicator) ensureRemoteLayout(ctx context.Context) error {
@@ -853,6 +970,18 @@ func (r *Replicator) emitImportedMessage(msg ImportedMessage) {
 		}
 	}()
 	r.importedHook(msg)
+}
+
+func (r *Replicator) emitImportedDelete(event ImportedDelete) {
+	if r.deletedHook == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Warn("imported delete hook panicked", "panic", rec)
+		}
+	}()
+	r.deletedHook(event)
 }
 
 func (r *Replicator) emitImportedPresence(event ImportedPresence) {

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
     username    TEXT    NOT NULL UNIQUE COLLATE NOCASE,
     password    TEXT    NOT NULL,
     avatar      TEXT,
+    banner      TEXT,
     role_id     INTEGER NOT NULL DEFAULT 3 REFERENCES roles(id),
     totp_secret TEXT,
     status      TEXT    NOT NULL DEFAULT 'offline',
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS messages (
     deleted    INTEGER NOT NULL DEFAULT 0,
     pinned     INTEGER NOT NULL DEFAULT 0,
     timestamp  TEXT    NOT NULL DEFAULT (datetime('now')),
+    sync_id    TEXT,
     reply_to   INTEGER REFERENCES messages(id) ON DELETE SET NULL,
     edited_at  TEXT
 );

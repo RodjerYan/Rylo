@@ -5,32 +5,111 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // CreateMessage inserts a new message and returns the assigned ID.
 // Content should already be sanitized before calling this function.
 func (d *DB) CreateMessage(channelID, userID int64, content string, replyTo *int64) (int64, error) {
-	res, err := d.sqlDB.Exec(
-		`INSERT INTO messages (channel_id, user_id, content, reply_to) VALUES (?, ?, ?, ?)`,
-		channelID, userID, content, replyTo,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("CreateMessage: %w", err)
-	}
-	return res.LastInsertId()
+	return d.CreateMessageWithTimestampAndSyncID(channelID, userID, content, replyTo, "", uuid.NewString())
 }
 
 // CreateMessageWithTimestamp inserts a new message using an explicit timestamp.
 // When timestamp is empty, callers should use CreateMessage instead.
 func (d *DB) CreateMessageWithTimestamp(channelID, userID int64, content string, replyTo *int64, timestamp string) (int64, error) {
-	res, err := d.sqlDB.Exec(
-		`INSERT INTO messages (channel_id, user_id, content, reply_to, timestamp) VALUES (?, ?, ?, ?, ?)`,
-		channelID, userID, content, replyTo, timestamp,
+	return d.CreateMessageWithTimestampAndSyncID(channelID, userID, content, replyTo, timestamp, uuid.NewString())
+}
+
+// CreateMessageWithTimestampAndSyncID inserts a message with explicit timestamp
+// and sync identifier used by cross-device replication.
+func (d *DB) CreateMessageWithTimestampAndSyncID(channelID, userID int64, content string, replyTo *int64, timestamp, syncID string) (int64, error) {
+	if strings.TrimSpace(syncID) == "" {
+		syncID = uuid.NewString()
+	}
+
+	var (
+		res sql.Result
+		err error
 	)
+	if strings.TrimSpace(timestamp) == "" {
+		res, err = d.sqlDB.Exec(
+			`INSERT INTO messages (channel_id, user_id, content, reply_to, sync_id) VALUES (?, ?, ?, ?, ?)`,
+			channelID, userID, content, replyTo, syncID,
+		)
+	} else {
+		res, err = d.sqlDB.Exec(
+			`INSERT INTO messages (channel_id, user_id, content, reply_to, timestamp, sync_id) VALUES (?, ?, ?, ?, ?, ?)`,
+			channelID, userID, content, replyTo, timestamp, syncID,
+		)
+	}
 	if err != nil {
-		return 0, fmt.Errorf("CreateMessageWithTimestamp: %w", err)
+		return 0, fmt.Errorf("CreateMessageWithTimestampAndSyncID: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// GetMessageSyncID returns the replication sync ID for a message.
+func (d *DB) GetMessageSyncID(id int64) (string, error) {
+	var syncID sql.NullString
+	if err := d.sqlDB.QueryRow(`SELECT sync_id FROM messages WHERE id = ?`, id).Scan(&syncID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("GetMessageSyncID: %w", err)
+	}
+	if !syncID.Valid {
+		return "", nil
+	}
+	return syncID.String, nil
+}
+
+// FindMessageIDBySyncID resolves a locally stored message using its stable
+// replication sync identifier.
+func (d *DB) FindMessageIDBySyncID(syncID string) (int64, error) {
+	if strings.TrimSpace(syncID) == "" {
+		return 0, nil
+	}
+	var id int64
+	if err := d.sqlDB.QueryRow(`SELECT id FROM messages WHERE sync_id = ? LIMIT 1`, syncID).Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("FindMessageIDBySyncID: %w", err)
+	}
+	return id, nil
+}
+
+// FindMessageIDByLegacySignature is a best-effort fallback for older messages
+// created before sync IDs existed.
+func (d *DB) FindMessageIDByLegacySignature(channelID, userID int64, timestamp string) (int64, error) {
+	var id int64
+	if err := d.sqlDB.QueryRow(
+		`SELECT id FROM messages
+		 WHERE channel_id = ? AND user_id = ? AND timestamp = ?
+		 ORDER BY id DESC
+		 LIMIT 1`,
+		channelID, userID, timestamp,
+	).Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("FindMessageIDByLegacySignature: %w", err)
+	}
+	return id, nil
+}
+
+// SetMessageDeleted flips the deleted flag without ownership checks. This is
+// used by replication rollback/import flows.
+func (d *DB) SetMessageDeleted(id int64, deleted bool) error {
+	val := 0
+	if deleted {
+		val = 1
+	}
+	if _, err := d.sqlDB.Exec(`UPDATE messages SET deleted = ? WHERE id = ?`, val, id); err != nil {
+		return fmt.Errorf("SetMessageDeleted: %w", err)
+	}
+	return nil
 }
 
 // GetMessage returns the message with the given ID, or nil if not found.

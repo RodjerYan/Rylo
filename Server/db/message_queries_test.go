@@ -71,6 +71,33 @@ func TestCreateMessage_ContentPreserved(t *testing.T) {
 	}
 }
 
+func TestCreateMessage_AssignsSyncID(t *testing.T) {
+	database := openMigratedMemory(t)
+	userID := seedUser(t, database, "sync-alice")
+	chID := seedChannel(t, database, "sync-channel")
+
+	id, err := database.CreateMessage(chID, userID, "hello", nil)
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+
+	syncID, err := database.GetMessageSyncID(id)
+	if err != nil {
+		t.Fatalf("GetMessageSyncID: %v", err)
+	}
+	if syncID == "" {
+		t.Fatal("expected sync ID to be assigned")
+	}
+
+	foundID, err := database.FindMessageIDBySyncID(syncID)
+	if err != nil {
+		t.Fatalf("FindMessageIDBySyncID: %v", err)
+	}
+	if foundID != id {
+		t.Fatalf("FindMessageIDBySyncID = %d, want %d", foundID, id)
+	}
+}
+
 // ─── GetMessage ───────────────────────────────────────────────────────────────
 
 func TestGetMessage_NotFound(t *testing.T) {

@@ -10,6 +10,7 @@ import { Disposable } from "@lib/disposable";
 import { authStore } from "@stores/auth.store";
 import { openSettings } from "@stores/ui.store";
 import { openUserProfile } from "@components/UserProfileOverlay";
+import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
 
 export interface UserBarOptions {
   readonly onDisconnect?: () => void;
@@ -26,6 +27,7 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
   let idEl: HTMLSpanElement | null = null;
   let statusEl: HTMLSpanElement | null = null;
   let profileClickableArea: HTMLDivElement | null = null;
+  let avatarRequestSeq = 0;
 
   function updateFromState(): void {
     const state = authStore.getState();
@@ -36,23 +38,55 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
     const initial = username.charAt(0).toUpperCase() || "?";
 
     if (avatarEl !== null && avatarTextEl !== null) {
+      avatarRequestSeq += 1;
+      const requestId = avatarRequestSeq;
       clearChildren(avatarEl);
-      if (avatar !== null && avatar.trim() !== "") {
-        const img = createElement("img", {
-          src: avatar,
-          alt: username,
-          style: "width:100%;height:100%;border-radius:50%;object-fit:cover;",
-        });
-        avatarEl.appendChild(img);
-      } else {
+
+      const appendFallback = (): void => {
+        if (avatarEl === null || avatarTextEl === null || requestId !== avatarRequestSeq) {
+          return;
+        }
         setText(avatarTextEl, initial);
         avatarEl.appendChild(avatarTextEl);
+        appendStatusDot();
+      };
+
+      const appendStatusDot = (): void => {
+        if (avatarEl === null || requestId !== avatarRequestSeq) {
+          return;
+        }
+        const statusDot = createElement("div", {
+          class: "status-dot",
+          style: "background: var(--green); width: 10px; height: 10px; border-radius: 50%; position: absolute; bottom: 0; right: 0;",
+        });
+        avatarEl.appendChild(statusDot);
+      };
+
+      if (avatar !== null && avatar.trim() !== "") {
+        const resolved = resolveServerUrl(avatar.trim());
+        if (isSafeUrl(resolved)) {
+          void fetchImageAsDataUrl(resolved).then((dataUrl) => {
+            if (avatarEl === null || requestId !== avatarRequestSeq || dataUrl === null || dataUrl.trim() === "") {
+              appendFallback();
+              return;
+            }
+            clearChildren(avatarEl);
+            const img = createElement("img", {
+              src: dataUrl,
+              alt: username,
+              style: "width:100%;height:100%;border-radius:50%;object-fit:cover;",
+            });
+            avatarEl.appendChild(img);
+            appendStatusDot();
+          }).catch(() => {
+            appendFallback();
+          });
+        } else {
+          appendFallback();
+        }
+      } else {
+        appendFallback();
       }
-      const statusDot = createElement("div", {
-        class: "status-dot",
-        style: "background: var(--green); width: 10px; height: 10px; border-radius: 50%; position: absolute; bottom: 0; right: 0;",
-      });
-      avatarEl.appendChild(statusDot);
     }
     if (nameEl !== null) {
       setText(nameEl, username);

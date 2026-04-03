@@ -93,6 +93,17 @@ export function updateDmLastMessagePreview(
   });
 }
 
+/** Replace the current DM preview when the visible last message gets deleted. */
+export function markDmMessageDeleted(channelId: number, messageId: number): void {
+  dmStore.setState((prev) => ({
+    channels: prev.channels.map((c) =>
+      c.channelId === channelId && c.lastMessageId === messageId
+        ? { ...c, lastMessage: "Message deleted" }
+        : c,
+    ),
+  }));
+}
+
 /** Clear unread count for a DM channel. */
 export function clearDmUnread(channelId: number): void {
   dmStore.setState((prev) => ({

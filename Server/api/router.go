@@ -91,6 +91,7 @@ func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.Ri
 	hub.SetReplicator(replicator)
 	if replicator != nil {
 		replicator.SetImportedMessageHook(hub.HandleReplicatedMessage)
+		replicator.SetImportedDeleteHook(hub.HandleReplicatedDelete)
 		replicator.SetImportedPresenceHook(hub.HandleReplicatedPresence)
 	}
 	getOnlineUsers = func() int { return hub.ClientCount() }

@@ -12,10 +12,12 @@ import {
   createElement,
   setText,
   appendChildren,
+  clearChildren,
 } from "@lib/dom";
 import { createIcon } from "@lib/icons";
 import type { MountableComponent } from "@lib/safe-render";
 import { openUserProfile } from "@components/UserProfileOverlay";
+import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
 
 export interface DmConversation {
   readonly userId: number;
@@ -65,24 +67,44 @@ function renderDmItem(
   const avatar = createElement("div", { class: "dm-avatar" });
   avatar.style.background = avatarBg;
 
-  if (convo.avatar !== null) {
-    const img = createElement("img", {
-      src: convo.avatar,
-      alt: convo.username,
-    });
-    img.style.width = "100%";
-    img.style.height = "100%";
-    img.style.borderRadius = "50%";
-    avatar.appendChild(img);
-  } else {
+  const appendFallback = (): void => {
+    clearChildren(avatar);
     setText(avatar, convo.username.charAt(0).toUpperCase());
-  }
+    avatar.appendChild(statusDot);
+  };
 
   // Status indicator dot
   const statusKey = convo.status ?? "offline";
   const statusDot = createElement("span", { class: "dm-status" });
   statusDot.style.background = STATUS_COLORS[statusKey] ?? "var(--text-micro)";
-  avatar.appendChild(statusDot);
+
+  if (convo.avatar !== null && convo.avatar.trim() !== "") {
+    const resolvedAvatar = resolveServerUrl(convo.avatar.trim());
+    if (isSafeUrl(resolvedAvatar)) {
+      void fetchImageAsDataUrl(resolvedAvatar).then((dataUrl) => {
+        if (signal.aborted || dataUrl === null || dataUrl.trim() === "") {
+          appendFallback();
+          return;
+        }
+        clearChildren(avatar);
+        const img = createElement("img", {
+          src: dataUrl,
+          alt: convo.username,
+        });
+        img.style.width = "100%";
+        img.style.height = "100%";
+        img.style.borderRadius = "50%";
+        avatar.appendChild(img);
+        avatar.appendChild(statusDot);
+      }).catch(() => {
+        appendFallback();
+      });
+    } else {
+      appendFallback();
+    }
+  } else {
+    appendFallback();
+  }
 
   // Username
   const name = createElement("span", { class: "dm-name" }, convo.username);

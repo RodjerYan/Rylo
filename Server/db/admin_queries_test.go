@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS messages (
     edited_at  TEXT,
     deleted    INTEGER NOT NULL DEFAULT 0,
     pinned     INTEGER NOT NULL DEFAULT 0,
-    timestamp  TEXT    NOT NULL DEFAULT (datetime('now'))
+    timestamp  TEXT    NOT NULL DEFAULT (datetime('now')),
+    sync_id    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (

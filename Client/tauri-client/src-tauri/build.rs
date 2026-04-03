@@ -20,7 +20,7 @@ fn build_server_binary() {
         .arg("-o")
         .arg("chatserver.exe")
         .arg("-ldflags")
-        .arg("-s -w -X main.version=1.0.6")
+        .arg("-s -w -X main.version=1.0.7")
         .arg(".")
         .status()
         .unwrap_or_else(|err| panic!("failed to spawn Go build for bundled server: {err}"));

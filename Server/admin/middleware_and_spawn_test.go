@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS users (
     username    TEXT    NOT NULL UNIQUE COLLATE NOCASE,
     password    TEXT    NOT NULL,
     avatar      TEXT,
+    banner      TEXT,
     role_id     INTEGER NOT NULL DEFAULT 3 REFERENCES roles(id),
     totp_secret TEXT,
     status      TEXT    NOT NULL DEFAULT 'offline',
@@ -98,6 +99,7 @@ CREATE TABLE IF NOT EXISTS messages (
     deleted    INTEGER NOT NULL DEFAULT 0,
     pinned     INTEGER NOT NULL DEFAULT 0,
     timestamp  TEXT    NOT NULL DEFAULT (datetime('now')),
+    sync_id    TEXT,
     reply_to   INTEGER REFERENCES messages(id) ON DELETE SET NULL,
     edited_at  TEXT
 );
@@ -401,7 +403,7 @@ func (m *mockHubWB) BroadcastChannelUpdate(ch *db.Channel)                  {}
 func (m *mockHubWB) BroadcastChannelDelete(channelID int64)                 {}
 func (m *mockHubWB) BroadcastMemberBan(userID int64)                        {}
 func (m *mockHubWB) BroadcastMemberUpdate(userID int64, roleName string)    {}
-func (m *mockHubWB) ClientCount() int                                        { return 0 }
+func (m *mockHubWB) ClientCount() int                                       { return 0 }
 
 // TestSpawnDetached_ValidExecutable verifies that spawnDetached can start a
 // real executable (the Go test binary itself) with a flag that causes immediate

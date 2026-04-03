@@ -10,6 +10,7 @@ import (
 
 	"github.com/rylo/server/auth"
 	"github.com/rylo/server/db"
+	"github.com/rylo/server/replication"
 	"github.com/rylo/server/ws"
 )
 
@@ -234,6 +235,33 @@ func TestHub_BroadcastToChannel_ZeroChannelSendsToAll(t *testing.T) {
 
 // ─── SendToUser ───────────────────────────────────────────────────────────────
 
+func TestHub_HandleReplicatedDelete_BroadcastsChatDeleted(t *testing.T) {
+	hub, database := newTestHub(t)
+	go hub.Run()
+	defer hub.Stop()
+
+	chID := seedTestChannel(t, database, "replicated-delete")
+	userID := seedTestUser(t, database, "replicated-user")
+	send := make(chan []byte, 8)
+	hub.Register(ws.NewTestClientWithChannel(hub, userID, chID, send))
+	time.Sleep(20 * time.Millisecond)
+
+	hub.HandleReplicatedDelete(replication.ImportedDelete{
+		MessageID:   42,
+		ChannelID:   chID,
+		ChannelKind: "text",
+	})
+
+	payload := receiveMsgOfType(send, "chat_deleted", 300*time.Millisecond)
+	if payload == nil {
+		t.Fatal("expected chat_deleted broadcast")
+	}
+	gotID, _ := payload["message_id"].(float64)
+	if int64(gotID) != 42 {
+		t.Fatalf("chat_deleted message_id = %v, want 42", gotID)
+	}
+}
+
 func TestHub_SendToUser_ExistingClient(t *testing.T) {
 	hub, database := newTestHub(t)
 	go hub.Run()
@@ -354,7 +382,7 @@ func TestHub_ChatSend_RateLimit(t *testing.T) {
 
 	// Drain all messages, count errors.
 	errCount := 0
-	drainLoop:
+drainLoop:
 	for {
 		select {
 		case got := <-send:
@@ -540,6 +568,7 @@ CREATE TABLE IF NOT EXISTS users (
     username    TEXT    NOT NULL UNIQUE COLLATE NOCASE,
     password    TEXT    NOT NULL,
     avatar      TEXT,
+    banner      TEXT,
     role_id     INTEGER NOT NULL DEFAULT 4 REFERENCES roles(id),
     totp_secret TEXT,
     status      TEXT    NOT NULL DEFAULT 'offline',
@@ -595,7 +624,8 @@ CREATE TABLE IF NOT EXISTS messages (
     edited_at  TEXT,
     deleted    INTEGER NOT NULL DEFAULT 0,
     pinned     INTEGER NOT NULL DEFAULT 0,
-    timestamp  TEXT    NOT NULL DEFAULT (datetime('now'))
+    timestamp  TEXT    NOT NULL DEFAULT (datetime('now')),
+    sync_id    TEXT
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(

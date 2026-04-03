@@ -46,6 +46,7 @@ import {
   removeDmChannel,
   updateDmLastMessage,
   updateDmLastMessagePreview,
+  markDmMessageDeleted,
   updateDmRecipientPresence,
 } from "@stores/dm.store";
 import type { DmChannel } from "@stores/dm.store";
@@ -259,6 +260,7 @@ export function wireDispatcher(ws: WsClient): DispatcherCleanup {
   unsubs.push(
     ws.on(S.CHAT_DELETED, (payload) => {
       deleteMessage(payload);
+      markDmMessageDeleted(payload.channel_id, payload.message_id);
     }),
   );
 

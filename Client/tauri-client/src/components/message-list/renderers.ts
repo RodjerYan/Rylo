@@ -69,9 +69,9 @@ export {
   formatFileSize,
   isImageMime,
   isSafeUrl,
+  fetchImageAsDataUrl,
   openCacheDb,
   uint8ToBase64,
-  fetchImageAsDataUrl,
   renderAttachment,
   setServerHost,
   resolveServerUrl,
@@ -85,7 +85,7 @@ import { formatTime, formatFullDate, formatMessageTimestamp } from "./formatting
 import { getUserRole, roleColorVar } from "./formatting";
 import { renderMentions, renderMessageContent } from "./content-parser";
 import { renderUrlEmbeds } from "./media";
-import { renderAttachment } from "./attachments";
+import { fetchImageAsDataUrl, isSafeUrl, renderAttachment, resolveServerUrl } from "./attachments";
 import { renderReactions } from "./reactions";
 
 // -- Composite rendering functions --------------------------------------------
@@ -161,6 +161,25 @@ export function renderMessage(
     class: "msg-avatar",
     style: `background: ${roleColorVar(role)}`,
   }, initial);
+  if (msg.user.avatar !== null && msg.user.avatar.trim() !== "") {
+    const resolvedAvatar = resolveServerUrl(msg.user.avatar.trim());
+    if (isSafeUrl(resolvedAvatar)) {
+      void fetchImageAsDataUrl(resolvedAvatar).then((dataUrl) => {
+        if (signal.aborted || dataUrl === null || dataUrl.trim() === "") {
+          return;
+        }
+        avatar.replaceChildren();
+        const image = createElement("img", {
+          src: dataUrl,
+          alt: msg.user.username,
+          style: "width:100%;height:100%;border-radius:50%;object-fit:cover;",
+        });
+        avatar.appendChild(image);
+      }).catch(() => {
+        // Keep the initial-based fallback already rendered.
+      });
+    }
+  }
   avatar.addEventListener("click", () => {
     openUserProfileById(msg.user.id);
   }, { signal });

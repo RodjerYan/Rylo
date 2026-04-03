@@ -776,6 +776,38 @@ func TestChatSend_SuccessWithReplyTo(t *testing.T) {
 	}
 }
 
+func TestChatSend_UsesFreshAvatarAfterProfileUpdate(t *testing.T) {
+	hub, database := newHandlerHub(t)
+	user := seedOwnerUser(t, database, "send-avatar-refresh1")
+	chID := seedTestChannel(t, database, "send-avatar-refresh-chan")
+
+	send := make(chan []byte, 32)
+	c := ws.NewTestClientWithUser(hub, user, chID, send)
+	hub.Register(c)
+	time.Sleep(20 * time.Millisecond)
+
+	avatarURL := "/api/v1/files/avatar-refresh"
+	if err := database.UpdateUserProfile(user.ID, nil, &avatarURL, nil); err != nil {
+		t.Fatalf("UpdateUserProfile: %v", err)
+	}
+
+	hub.HandleMessageForTest(c, chatSendMsg(chID, "with fresh avatar"))
+	time.Sleep(50 * time.Millisecond)
+
+	payload := receiveMsgOfType(send, "chat_message", 300*time.Millisecond)
+	if payload == nil {
+		t.Fatal("expected chat_message broadcast")
+	}
+	userPayload, ok := payload["user"].(map[string]any)
+	if !ok {
+		t.Fatal("chat_message missing user payload")
+	}
+	gotAvatar, _ := userPayload["avatar"].(string)
+	if gotAvatar != avatarURL {
+		t.Fatalf("chat_message avatar = %q, want %q", gotAvatar, avatarURL)
+	}
+}
+
 // TestChatSend_NilUserClientSendsMessage verifies that a client without a user
 // object attached still sends a message (uses empty username/nil avatar).
 func TestChatSend_NilUserClientSendsMessage(t *testing.T) {

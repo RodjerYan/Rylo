@@ -161,17 +161,35 @@ func (h *Hub) handleChatSend(ctx context.Context, c *Client, reqID string, paylo
 		return
 	}
 
+	sender := c.user
+	if freshSender, freshErr := h.db.GetUserByID(c.userID); freshErr != nil {
+		slog.Warn("ws handleChatSend GetUserByID", "err", freshErr, "user_id", c.userID)
+	} else if freshSender != nil {
+		sender = freshSender
+		c.user = freshSender
+	}
+
 	var username string
 	var avatar *string
-	if c.user != nil {
-		username = c.user.Username
-		avatar = c.user.Avatar
+	if sender != nil {
+		username = sender.Username
+		avatar = sender.Avatar
 	}
 
 	slog.Debug("message sent", "user", username, "channel_id", channelID, "msg_id", msgID)
 
 	if h.replicator != nil && h.replicator.Enabled() {
+		syncID, syncErr := h.db.GetMessageSyncID(msgID)
+		if syncErr != nil {
+			slog.Error("ws handleChatSend GetMessageSyncID", "err", syncErr, "msg_id", msgID)
+			if delErr := h.db.DeleteMessage(msgID, c.userID, true); delErr != nil {
+				slog.Error("ws handleChatSend DeleteMessage (sync id cleanup)", "err", delErr, "msg_id", msgID)
+			}
+			c.sendMsg(buildErrorMsg(ErrCodeInternal, "failed to mirror message"))
+			return
+		}
 		replicationPayload := replication.MessagePayload{
+			SyncID:         syncID,
 			ChannelKind:    ch.Type,
 			ChannelID:      channelID,
 			ChannelName:    ch.Name,
@@ -246,8 +264,8 @@ func (h *Hub) handleChatSend(ctx context.Context, c *Client, reqID string, paylo
 			}
 			// Notify the recipient that the DM was (re)opened.
 			// Build the event with the sender as the recipient's "other user".
-			if c.user != nil {
-				h.SendToUser(pid, buildDMChannelOpen(channelID, c.user))
+			if sender != nil {
+				h.SendToUser(pid, buildDMChannelOpen(channelID, sender))
 			}
 		}
 	} else {
@@ -371,6 +389,10 @@ func (h *Hub) handleChatDelete(ctx context.Context, c *Client, _ string, payload
 
 	// Check channel type for DM-aware permission handling.
 	delCh, chErr := h.db.GetChannel(msg.ChannelID)
+	if chErr != nil || delCh == nil {
+		c.sendMsg(buildErrorMsg(ErrCodeInternal, "failed to load message channel"))
+		return
+	}
 	delIsDM := chErr == nil && delCh != nil && delCh.Type == "dm"
 
 	if delIsDM {
@@ -389,9 +411,66 @@ func (h *Hub) handleChatDelete(ctx context.Context, c *Client, _ string, payload
 
 	// In DMs, users can only delete their own messages (no mod override).
 	isMod := !delIsDM && h.hasChannelPerm(c, msg.ChannelID, permissions.ManageMessages)
+	deletePayload := replication.MessageDeletePayload{}
+	if h.replicator != nil && h.replicator.Enabled() {
+		syncID, syncErr := h.db.GetMessageSyncID(msgID)
+		if syncErr != nil {
+			slog.Error("ws handleChatDelete GetMessageSyncID", "err", syncErr, "msg_id", msgID)
+			c.sendMsg(buildErrorMsg(ErrCodeInternal, "failed to replicate deletion"))
+			return
+		}
+
+		author, userErr := h.db.GetUserByID(msg.UserID)
+		if userErr != nil || author == nil {
+			if userErr != nil {
+				slog.Error("ws handleChatDelete GetUserByID", "err", userErr, "user_id", msg.UserID)
+			}
+			c.sendMsg(buildErrorMsg(ErrCodeInternal, "failed to replicate deletion"))
+			return
+		}
+
+		deletePayload = replication.MessageDeletePayload{
+			SyncID:         syncID,
+			ChannelKind:    delCh.Type,
+			ChannelID:      delCh.ID,
+			ChannelName:    delCh.Name,
+			SenderUsername: author.Username,
+			Timestamp:      msg.Timestamp,
+		}
+		if delIsDM {
+			participantIDs, pErr := h.db.GetDMParticipantIDs(msg.ChannelID)
+			if pErr != nil {
+				slog.Error("ws handleChatDelete GetDMParticipantIDs for replication", "err", pErr, "channel_id", msg.ChannelID)
+				c.sendMsg(buildErrorMsg(ErrCodeInternal, "failed to replicate deletion"))
+				return
+			}
+			for _, pid := range participantIDs {
+				user, userErr := h.db.GetUserByID(pid)
+				if userErr != nil || user == nil {
+					if userErr != nil {
+						slog.Error("ws handleChatDelete GetUserByID for replication", "err", userErr, "user_id", pid)
+					}
+					continue
+				}
+				deletePayload.DMParticipants = append(deletePayload.DMParticipants, user.Username)
+			}
+		}
+	}
 	if err := h.db.DeleteMessage(msgID, c.userID, isMod); err != nil {
 		c.sendMsg(buildErrorMsg(ErrCodeForbidden, "cannot delete this message"))
 		return
+	}
+	if h.replicator != nil && h.replicator.Enabled() {
+		if err := h.replicator.MirrorMessageDelete(ctx, deletePayload); err != nil {
+			slog.Error("ws handleChatDelete MirrorMessageDelete", "err", err, "msg_id", msgID)
+			if !msg.Deleted {
+				if restoreErr := h.db.SetMessageDeleted(msgID, false); restoreErr != nil {
+					slog.Error("ws handleChatDelete SetMessageDeleted rollback", "err", restoreErr, "msg_id", msgID)
+				}
+			}
+			c.sendMsg(buildErrorMsg(ErrCodeInternal, "failed to replicate deletion"))
+			return
+		}
 	}
 
 	slog.Debug("message deleted", "user_id", c.userID, "msg_id", msgID, "channel_id", msg.ChannelID, "is_mod", isMod)
