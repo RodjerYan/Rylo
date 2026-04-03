@@ -30,11 +30,11 @@ type inviteResponse struct {
 }
 
 // MountInviteRoutes registers invite endpoints on the given router.
-// All routes require authentication and MANAGE_INVITES permission.
+// All routes require authentication. Any authenticated user can create invites,
+// while elevated users can manage every invite on the server.
 func MountInviteRoutes(r chi.Router, database *db.DB) {
 	r.Route("/api/v1/invites", func(r chi.Router) {
 		r.Use(AuthMiddleware(database))
-		r.Use(RequirePermission(permissions.ManageInvites))
 
 		r.Post("/", handleCreateInvite(database))
 		r.Get("/", handleListInvites(database))
@@ -101,7 +101,26 @@ func handleCreateInvite(database *db.DB) http.HandlerFunc {
 // handleListInvites processes GET /api/v1/invites.
 func handleListInvites(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		invites, err := database.ListInvites()
+		user, ok := r.Context().Value(UserKey).(*db.User)
+		if !ok || user == nil {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{
+				Error:   "UNAUTHORIZED",
+				Message: "not authenticated",
+			})
+			return
+		}
+
+		role, _ := r.Context().Value(RoleKey).(*db.Role)
+
+		var (
+			invites []*db.Invite
+			err     error
+		)
+		if canManageAnyInvites(role) {
+			invites, err = database.ListInvites()
+		} else {
+			invites, err = database.ListInvitesByCreator(user.ID)
+		}
 		if err != nil {
 			slog.Error("handleListInvites ListInvites", "err", err)
 			writeJSON(w, http.StatusInternalServerError, errorResponse{
@@ -123,6 +142,15 @@ func handleListInvites(database *db.DB) http.HandlerFunc {
 func handleRevokeInvite(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code := chi.URLParam(r, "code")
+		user, ok := r.Context().Value(UserKey).(*db.User)
+		if !ok || user == nil {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{
+				Error:   "UNAUTHORIZED",
+				Message: "not authenticated",
+			})
+			return
+		}
+		role, _ := r.Context().Value(RoleKey).(*db.Role)
 
 		inv, err := database.GetInvite(code)
 		if err != nil {
@@ -140,6 +168,13 @@ func handleRevokeInvite(database *db.DB) http.HandlerFunc {
 			})
 			return
 		}
+		if !canManageAnyInvites(role) && inv.CreatedBy != user.ID {
+			writeJSON(w, http.StatusForbidden, errorResponse{
+				Error:   "FORBIDDEN",
+				Message: "insufficient permissions",
+			})
+			return
+		}
 
 		if err := database.RevokeInvite(code); err != nil {
 			slog.Error("handleRevokeInvite RevokeInvite", "err", err, "code", code)
@@ -152,6 +187,16 @@ func handleRevokeInvite(database *db.DB) http.HandlerFunc {
 
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func canManageAnyInvites(role *db.Role) bool {
+	if role == nil {
+		return false
+	}
+	if permissions.HasAdmin(role.Permissions) {
+		return true
+	}
+	return permissions.HasPerm(role.Permissions, permissions.ManageInvites)
 }
 
 // toInviteResponse converts a db.Invite to the API response shape.

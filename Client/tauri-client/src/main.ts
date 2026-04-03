@@ -277,9 +277,9 @@ function renderPage(pageId: "connect" | "main"): void {
           wirePostAuth(host, result.token, username, savedPassword);
         }
       },
-      async onRegister(host, username, password, inviteCode) {
+      async onRegister(host, username, password, inviteCode, email, adminCode) {
         api.setConfig({ host });
-        const result = await api.register(username, password, inviteCode);
+        const result = await api.register(username, password, inviteCode, email, adminCode);
         const remember = connectPage.getRememberPassword();
         const savedPassword = remember ? password : undefined;
         ensureProfileExists(host, username, remember);

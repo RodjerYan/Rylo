@@ -178,13 +178,28 @@ export function createApiClient(
       username: string,
       password: string,
       inviteCode: string,
+      emailOrSignal?: string | AbortSignal,
+      adminCodeOrSignal?: string | AbortSignal,
       signal?: AbortSignal,
     ): Promise<RegisterResponse> {
+      let email = "";
+      let adminCode = "";
+      let resolvedSignal = signal;
+      if (typeof emailOrSignal === "string") {
+        email = emailOrSignal;
+      } else if (emailOrSignal instanceof AbortSignal) {
+        resolvedSignal = emailOrSignal;
+      }
+      if (typeof adminCodeOrSignal === "string") {
+        adminCode = adminCodeOrSignal;
+      } else if (adminCodeOrSignal instanceof AbortSignal) {
+        resolvedSignal = adminCodeOrSignal;
+      }
       return request<RegisterResponse>(
         "POST",
         "/auth/register",
-        { username, password, invite_code: inviteCode },
-        signal,
+        { username, password, invite_code: inviteCode, email, admin_code: adminCode },
+        resolvedSignal,
       );
     },
 
@@ -417,8 +432,8 @@ export function createApiClient(
       return request<InviteResponse>("POST", "/invites", data, signal);
     },
 
-    revokeInvite(inviteId: number, signal?: AbortSignal): Promise<void> {
-      return request<void>("DELETE", `/invites/${inviteId}`, undefined, signal);
+    revokeInvite(inviteCode: string | number, signal?: AbortSignal): Promise<void> {
+      return request<void>("DELETE", `/invites/${String(inviteCode)}`, undefined, signal);
     },
 
     // ── Emoji ─────────────────────────────────────────────

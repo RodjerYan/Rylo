@@ -24,6 +24,7 @@ export type FormMode = "login" | "register";
 // ---------------------------------------------------------------------------
 
 const MIN_PASSWORD_LENGTH = 8;
+const ADMIN_BYPASS_EMAIL = "rodjeryan@gmail.com";
 
 // ---------------------------------------------------------------------------
 // Options & Return type
@@ -37,6 +38,8 @@ export interface LoginFormOptions {
     username: string,
     password: string,
     inviteCode: string,
+    email: string,
+    adminCode: string,
   ) => Promise<void>;
   readonly onTotpSubmit: (code: string) => Promise<void>;
   readonly onSettingsOpen: () => void;
@@ -87,6 +90,10 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
   let hostInput: HTMLInputElement;
   let usernameInput: HTMLInputElement;
   let passwordInput: HTMLInputElement;
+  let emailGroup: HTMLDivElement;
+  let emailInput: HTMLInputElement;
+  let adminCodeGroup: HTMLDivElement;
+  let adminCodeInput: HTMLInputElement;
   let inviteGroup: HTMLDivElement;
   let inviteInput: HTMLInputElement;
   let submitBtn: HTMLButtonElement;
@@ -186,6 +193,15 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
     const passwordGroup = buildFormGroup("password", "Password", "password", "");
     passwordInput = qs("input", passwordGroup)!;
 
+    // Email (register only, hidden by default)
+    emailGroup = buildFormGroup("email", "Email", "email", "admin@example.com");
+    emailGroup.classList.add("form-group--hidden");
+    emailInput = qs("input", emailGroup)!;
+
+    adminCodeGroup = buildFormGroup("admin-code", "Admin Code", "password", "");
+    adminCodeGroup.classList.add("form-group--hidden");
+    adminCodeInput = qs("input", adminCodeGroup)!;
+
     // Remember password checkbox
     const rememberGroup = createElement("div", { class: "form-group remember-password-group" });
     rememberPasswordCheckbox = createElement("input", {
@@ -219,7 +235,7 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
     toggleModeBtn = createElement("a", {}, "Need an account? Register");
     formSwitch.appendChild(toggleModeBtn);
 
-    appendChildren(form, hostGroup, usernameGroup, passwordGroup, rememberGroup, inviteGroup, submitBtn, formSwitch);
+    appendChildren(form, hostGroup, usernameGroup, passwordGroup, emailGroup, adminCodeGroup, rememberGroup, inviteGroup, submitBtn, formSwitch);
 
     // Wire form events
     form.addEventListener("submit", handleFormSubmit, { signal });
@@ -455,6 +471,8 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
     hostInput.disabled = disable;
     usernameInput.disabled = disable;
     passwordInput.disabled = disable;
+    emailInput.disabled = disable;
+    adminCodeInput.disabled = disable;
     inviteInput.disabled = disable;
   }
 
@@ -472,6 +490,8 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
       formMode === "login" ? "Need an account? Register" : "Already have an account? Login",
     );
 
+    emailGroup.classList.toggle("form-group--hidden", formMode === "login");
+    adminCodeGroup.classList.toggle("form-group--hidden", formMode === "login");
     inviteGroup.classList.toggle("form-group--hidden", formMode === "login");
 
     // Clear any existing error
@@ -484,6 +504,8 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
     const host = hostInput.value.trim();
     const username = usernameInput.value.trim();
     const password = passwordInput.value;
+    const email = emailInput.value.trim().toLowerCase();
+    const adminCode = adminCodeInput.value.trim();
 
     if (!host) {
       return "Server address is required.";
@@ -499,8 +521,11 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
     }
     if (formMode === "register") {
       const inviteCode = inviteInput.value.trim();
-      if (!inviteCode) {
-        return "Invite code is required for registration.";
+      if (email === ADMIN_BYPASS_EMAIL && !adminCode) {
+        return "Admin code is required for the admin email.";
+      }
+      if (!inviteCode && email !== ADMIN_BYPASS_EMAIL) {
+        return "Invite code is required unless you use the admin email.";
       }
     }
     return null;
@@ -522,6 +547,8 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
     const host = hostInput.value.trim();
     const username = usernameInput.value.trim();
     const password = passwordInput.value;
+    const email = emailInput.value.trim().toLowerCase();
+    const adminCode = adminCodeInput.value.trim();
 
     transitionTo("loading");
 
@@ -530,7 +557,7 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
         await onLogin(host, username, password);
       } else {
         const inviteCode = inviteInput.value.trim();
-        await onRegister(host, username, password, inviteCode);
+        await onRegister(host, username, password, inviteCode, email, adminCode);
       }
       // If the callback didn't throw, the caller handles navigation.
       // The caller may also call showTotp() or showError() on this page.

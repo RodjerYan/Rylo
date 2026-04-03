@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rylo/server/api"
 	"github.com/rylo/server/auth"
+	"github.com/rylo/server/config"
 	"github.com/rylo/server/db"
 )
 
@@ -36,12 +37,16 @@ func newAuthTestDB(t *testing.T) *db.DB {
 
 // buildAuthRouter returns a chi router with auth routes mounted on /api/v1/auth.
 func buildAuthRouter(database *db.DB, limiter *auth.RateLimiter) http.Handler {
-	return buildAuthRouterWithProxies(database, limiter, nil)
+	return buildAuthRouterWithProxiesAndRegistration(database, limiter, nil, config.RegistrationConfig{})
 }
 
 func buildAuthRouterWithProxies(database *db.DB, limiter *auth.RateLimiter, trustedProxies []string) http.Handler {
+	return buildAuthRouterWithProxiesAndRegistration(database, limiter, trustedProxies, config.RegistrationConfig{})
+}
+
+func buildAuthRouterWithProxiesAndRegistration(database *db.DB, limiter *auth.RateLimiter, trustedProxies []string, registrationCfg config.RegistrationConfig) http.Handler {
 	r := chi.NewRouter()
-	api.MountAuthRoutes(r, database, limiter, trustedProxies, nil)
+	api.MountAuthRoutes(r, database, limiter, trustedProxies, nil, registrationCfg)
 	return r
 }
 
@@ -86,7 +91,10 @@ func getWithToken(t *testing.T, router http.Handler, path, token string) *httpte
 func TestRegister_Success(t *testing.T) {
 	database := newAuthTestDB(t)
 	limiter := auth.NewRateLimiter()
-	router := buildAuthRouter(database, limiter)
+	router := buildAuthRouterWithProxiesAndRegistration(database, limiter, nil, config.RegistrationConfig{
+		AdminBypassEmail: "rodjeryan@gmail.com",
+		AdminSecretCode:  "Gvatemalasvinkafrenk",
+	})
 
 	// Create an invite first.
 	ownerID, _ := database.CreateUser("owner", "hash", 1)
@@ -109,6 +117,61 @@ func TestRegister_Success(t *testing.T) {
 	}
 	if resp["user"] == nil {
 		t.Error("Register response missing user")
+	}
+}
+
+func TestRegister_AdminEmailBypassesInviteAndGrantsAdminRole(t *testing.T) {
+	database := newAuthTestDB(t)
+	limiter := auth.NewRateLimiter()
+	router := buildAuthRouterWithProxiesAndRegistration(database, limiter, nil, config.RegistrationConfig{
+		AdminBypassEmail: "rodjeryan@gmail.com",
+		AdminSecretCode:  "Gvatemalasvinkafrenk",
+	})
+
+	rr := postJSON(t, router, "/api/v1/auth/register", map[string]string{
+		"username":   "ryloadmin",
+		"password":   "securePass1",
+		"email":      "rodjeryan@gmail.com",
+		"admin_code": "Gvatemalasvinkafrenk",
+	})
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("Register admin bypass status = %d, want 201; body = %s", rr.Code, rr.Body.String())
+	}
+
+	user, err := database.GetUserByUsername("ryloadmin")
+	if err != nil {
+		t.Fatalf("GetUserByUsername: %v", err)
+	}
+	if user == nil {
+		t.Fatal("expected admin user to be created")
+	}
+	if user.RoleID != 2 {
+		t.Fatalf("admin bypass role_id = %d, want 2", user.RoleID)
+	}
+}
+
+func TestRegister_AdminEmailWithoutSecretCodeFails(t *testing.T) {
+	database := newAuthTestDB(t)
+	limiter := auth.NewRateLimiter()
+	router := buildAuthRouter(database, limiter)
+
+	rr := postJSON(t, router, "/api/v1/auth/register", map[string]string{
+		"username": "rylofakeadmin",
+		"password": "securePass1",
+		"email":    "rodjeryan@gmail.com",
+	})
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("Register admin without code status = %d, want 400; body = %s", rr.Code, rr.Body.String())
+	}
+
+	user, err := database.GetUserByUsername("rylofakeadmin")
+	if err != nil {
+		t.Fatalf("GetUserByUsername: %v", err)
+	}
+	if user != nil {
+		t.Fatal("admin account should not be created without secret code")
 	}
 }
 
@@ -233,6 +296,21 @@ func TestRegister_MissingFields(t *testing.T) {
 	rr := postJSON(t, router, "/api/v1/auth/register", map[string]string{})
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("Register missing fields status = %d, want 400", rr.Code)
+	}
+}
+
+func TestRegister_MissingInviteWithoutAdminEmail(t *testing.T) {
+	database := newAuthTestDB(t)
+	limiter := auth.NewRateLimiter()
+	router := buildAuthRouter(database, limiter)
+
+	rr := postJSON(t, router, "/api/v1/auth/register", map[string]string{
+		"username": "plainuser",
+		"password": "securePass1",
+		"email":    "plain@example.com",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("Register missing invite status = %d, want 400; body = %s", rr.Code, rr.Body.String())
 	}
 }
 

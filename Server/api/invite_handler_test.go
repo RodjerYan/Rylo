@@ -9,13 +9,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rylo/server/api"
 	"github.com/rylo/server/auth"
+	"github.com/rylo/server/config"
 	"github.com/rylo/server/db"
 )
 
 // buildInviteRouter returns a chi router with invite routes and auth middleware.
 func buildInviteRouter(database *db.DB, limiter *auth.RateLimiter) http.Handler {
 	r := chi.NewRouter()
-	api.MountAuthRoutes(r, database, limiter, nil, nil)
+	api.MountAuthRoutes(r, database, limiter, nil, nil, config.RegistrationConfig{})
 	api.MountInviteRoutes(r, database)
 	return r
 }
@@ -75,15 +76,14 @@ func TestCreateInvite_MemberForbidden(t *testing.T) {
 	limiter := auth.NewRateLimiter()
 	router := buildInviteRouter(database, limiter)
 
-	// Member role (id=4) does NOT have MANAGE_INVITES.
 	token := loginAndGetToken(t, router, database, "memberuser", 4)
 
 	rr := postJSONWithToken(t, router, "/api/v1/invites", token, map[string]any{
 		"max_uses": 1,
 	})
 
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("CreateInvite member status = %d, want 403", rr.Code)
+	if rr.Code != http.StatusCreated {
+		t.Errorf("CreateInvite member status = %d, want 201; body = %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -128,6 +128,34 @@ func TestListInvites_Success(t *testing.T) {
 	_ = json.NewDecoder(rr.Body).Decode(&resp)
 	if len(resp) < 2 {
 		t.Errorf("ListInvites returned %d items, want >= 2", len(resp))
+	}
+}
+
+func TestListInvites_MemberSeesOwnInvitesOnly(t *testing.T) {
+	database := newAuthTestDB(t)
+	limiter := auth.NewRateLimiter()
+	router := buildInviteRouter(database, limiter)
+
+	memberToken := loginAndGetToken(t, router, database, "memberlist", 4)
+	otherToken := loginAndGetToken(t, router, database, "othermember", 4)
+
+	postJSONWithToken(t, router, "/api/v1/invites", memberToken, map[string]any{"max_uses": 1})
+	postJSONWithToken(t, router, "/api/v1/invites", otherToken, map[string]any{"max_uses": 1})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/invites", nil)
+	req.Header.Set("Authorization", "Bearer "+memberToken)
+	req.RemoteAddr = "127.0.0.1:9999"
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ListInvites member status = %d, want 200; body = %s", rr.Code, rr.Body.String())
+	}
+
+	var resp []map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	if len(resp) != 1 {
+		t.Fatalf("ListInvites member count = %d, want 1", len(resp))
 	}
 }
 
@@ -204,7 +232,7 @@ func TestRevokeInvite_NotFound(t *testing.T) {
 	}
 }
 
-func TestRevokeInvite_MemberForbidden(t *testing.T) {
+func TestRevokeInvite_MemberForbiddenForForeignInvite(t *testing.T) {
 	database := newAuthTestDB(t)
 	limiter := auth.NewRateLimiter()
 	router := buildInviteRouter(database, limiter)
@@ -227,6 +255,33 @@ func TestRevokeInvite_MemberForbidden(t *testing.T) {
 
 	if rr2.Code != http.StatusForbidden {
 		t.Errorf("RevokeInvite member status = %d, want 403", rr2.Code)
+	}
+}
+
+func TestRevokeInvite_MemberCanRevokeOwnInvite(t *testing.T) {
+	database := newAuthTestDB(t)
+	limiter := auth.NewRateLimiter()
+	router := buildInviteRouter(database, limiter)
+
+	memberToken := loginAndGetToken(t, router, database, "memberrevoke", 4)
+
+	rr := postJSONWithToken(t, router, "/api/v1/invites", memberToken, map[string]any{})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("Create invite for member revoke test: status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	var created map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&created)
+	code := created["code"].(string)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/invites/"+code, nil)
+	req.Header.Set("Authorization", "Bearer "+memberToken)
+	req.RemoteAddr = "127.0.0.1:9999"
+	rr2 := httptest.NewRecorder()
+	router.ServeHTTP(rr2, req)
+
+	if rr2.Code != http.StatusNoContent {
+		t.Fatalf("RevokeInvite own member status = %d, want 204; body = %s", rr2.Code, rr2.Body.String())
 	}
 }
 

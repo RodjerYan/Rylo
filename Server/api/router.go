@@ -67,7 +67,7 @@ func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.Ri
 	})
 
 	// Auth routes: register, login, logout, me.
-	MountAuthRoutes(r, database, limiter, cfg.Server.TrustedProxies, replicator)
+	MountAuthRoutes(r, database, limiter, cfg.Server.TrustedProxies, replicator, cfg.Registration)
 
 	// Invite management routes (require MANAGE_INVITES permission).
 	MountInviteRoutes(r, database)

@@ -19,13 +19,14 @@ import (
 
 // Config holds the full server configuration.
 type Config struct {
-	Server     ServerConfig     `koanf:"server"`
-	Database   DatabaseConfig   `koanf:"database"`
-	TLS        TLSConfig        `koanf:"tls"`
-	Upload     UploadConfig     `koanf:"upload"`
-	Voice      VoiceConfig      `koanf:"voice"`
-	GitHub     GitHubConfig     `koanf:"github"`
-	YandexDisk YandexDiskConfig `koanf:"yandex_disk"`
+	Server       ServerConfig       `koanf:"server"`
+	Database     DatabaseConfig     `koanf:"database"`
+	TLS          TLSConfig          `koanf:"tls"`
+	Upload       UploadConfig       `koanf:"upload"`
+	Voice        VoiceConfig        `koanf:"voice"`
+	GitHub       GitHubConfig       `koanf:"github"`
+	YandexDisk   YandexDiskConfig   `koanf:"yandex_disk"`
+	Registration RegistrationConfig `koanf:"registration"`
 }
 
 // GitHubConfig holds GitHub API settings for update checking.
@@ -41,6 +42,12 @@ type YandexDiskConfig struct {
 	OAuthToken          string `koanf:"oauth_token"`
 	EncryptionKey       string `koanf:"encryption_key"`
 	PollIntervalSeconds int    `koanf:"poll_interval_seconds"`
+}
+
+// RegistrationConfig holds invitation and privileged bootstrap settings.
+type RegistrationConfig struct {
+	AdminBypassEmail string `koanf:"admin_bypass_email"`
+	AdminSecretCode  string `koanf:"admin_secret_code"`
 }
 
 // VoiceConfig holds LiveKit server connection and voice quality settings.
@@ -126,6 +133,7 @@ func defaults() Config {
 			OAuthToken:          "y0__xCDkZwgGJjuPyDTpI37FjCA3bCRCM3Vs_NqcknUFmCgLxsJZeFlDh1M",
 			PollIntervalSeconds: 10,
 		},
+		Registration: RegistrationConfig{},
 	}
 }
 
@@ -176,6 +184,10 @@ yandex_disk:
   oauth_token: "y0__xCDkZwgGJjuPyDTpI37FjCA3bCRCM3Vs_NqcknUFmCgLxsJZeFlDh1M"
   encryption_key: ""  # optional 32-byte key (base64/hex/plain); defaults to token-derived key
   poll_interval_seconds: 10
+
+registration:
+  admin_bypass_email: ""
+  admin_secret_code: ""
 `
 
 // Load reads configuration from the given YAML file path, merging with

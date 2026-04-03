@@ -27,6 +27,8 @@ export interface ConnectPageCallbacks {
     username: string,
     password: string,
     inviteCode: string,
+    email: string,
+    adminCode: string,
   ): Promise<void>;
   onTotpSubmit(code: string): Promise<void>;
   onAddProfile?(name: string, host: string): void;

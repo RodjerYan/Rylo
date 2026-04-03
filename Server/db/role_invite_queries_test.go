@@ -154,3 +154,23 @@ func TestListInvites_IncludesRevokedInvites(t *testing.T) {
 		t.Errorf("ListInvites revoked count = %d, want 1", revokedCount)
 	}
 }
+
+func TestListInvitesByCreator_FiltersOtherUsers(t *testing.T) {
+	database := newTestDB(t)
+	ownerID, _ := database.CreateUser("invite_owner", "hash", 4)
+	otherID, _ := database.CreateUser("invite_other", "hash", 4)
+
+	_, _ = database.CreateInvite(ownerID, 1, nil)
+	_, _ = database.CreateInvite(otherID, 1, nil)
+
+	invites, err := database.ListInvitesByCreator(ownerID)
+	if err != nil {
+		t.Fatalf("ListInvitesByCreator: %v", err)
+	}
+	if len(invites) != 1 {
+		t.Fatalf("ListInvitesByCreator count = %d, want 1", len(invites))
+	}
+	if invites[0].CreatedBy != ownerID {
+		t.Fatalf("ListInvitesByCreator CreatedBy = %d, want %d", invites[0].CreatedBy, ownerID)
+	}
+}

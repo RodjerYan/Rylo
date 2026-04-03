@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/rylo/server/auth"
+	"github.com/rylo/server/config"
 	"github.com/rylo/server/db"
 	"github.com/rylo/server/permissions"
 	"github.com/rylo/server/replication"
@@ -33,6 +35,8 @@ type registerRequest struct {
 	Username   string `json:"username"`
 	Password   string `json:"password"`
 	InviteCode string `json:"invite_code"`
+	Email      string `json:"email"`
+	AdminCode  string `json:"admin_code"`
 }
 
 // loginRequest is the JSON body for POST /api/v1/auth/login.
@@ -82,7 +86,7 @@ type totpEnableResponse struct {
 // Rate limiters are applied per-endpoint as specified. trustedProxies is the
 // list of CIDRs whose X-Forwarded-For / X-Real-IP headers are honoured for
 // rate-limiting IP resolution.
-func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, trustedProxies []string, replicator *replication.Replicator) {
+func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, trustedProxies []string, replicator *replication.Replicator, registrationCfg config.RegistrationConfig) {
 	registerLimiter := limiter
 	loginLimiter := limiter
 	partialStore := auth.NewPartialAuthStore(10 * time.Minute)
@@ -90,7 +94,7 @@ func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, t
 
 	r.Route("/api/v1/auth", func(r chi.Router) {
 		r.With(RateLimitMiddleware(registerLimiter, 3, time.Minute, trustedProxies)).
-			Post("/register", handleRegister(database, replicator))
+			Post("/register", handleRegister(database, replicator, registrationCfg))
 
 		r.With(RateLimitMiddleware(loginLimiter, 60, time.Minute, trustedProxies)).
 			Post("/login", handleLogin(database, limiter, partialStore, trustedProxies))
@@ -123,7 +127,7 @@ func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, t
 }
 
 // handleRegister processes POST /api/v1/auth/register.
-func handleRegister(database *db.DB, replicator *replication.Replicator) http.HandlerFunc {
+func handleRegister(database *db.DB, replicator *replication.Replicator, registrationCfg config.RegistrationConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		registrationOpen, err := isRegistrationOpen(database)
 		if err != nil {
@@ -168,11 +172,29 @@ func handleRegister(database *db.DB, replicator *replication.Replicator) http.Ha
 
 		req.Username = strings.TrimSpace(sanitizer.Sanitize(req.Username))
 		req.InviteCode = strings.TrimSpace(req.InviteCode)
+		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+		req.AdminCode = strings.TrimSpace(req.AdminCode)
 
-		if req.Username == "" || req.Password == "" || req.InviteCode == "" {
+		if req.Username == "" || req.Password == "" {
 			writeJSON(w, http.StatusBadRequest, errorResponse{
 				Error:   "INVALID_INPUT",
-				Message: "username, password, and invite_code are required",
+				Message: "username and password are required",
+			})
+			return
+		}
+		adminBypassEmail := isAdminRegistrationBypassEmail(registrationCfg, req.Email)
+		adminBypass := adminBypassEmail && isAdminRegistrationSecretCode(registrationCfg, req.AdminCode)
+		if adminBypassEmail && !adminBypass {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "admin_code is required for the admin email",
+			})
+			return
+		}
+		if !adminBypass && req.InviteCode == "" {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "invite_code is required unless you register with the admin email",
 			})
 			return
 		}
@@ -206,18 +228,28 @@ func handleRegister(database *db.DB, replicator *replication.Replicator) http.Ha
 			return
 		}
 
+		roleID := permissions.MemberRoleID
+		if adminBypass {
+			roleID = permissions.AdminRoleID
+		}
+
 		var prepared *replication.PreparedRegistration
 		if replicator != nil && replicator.Enabled() {
-			prepared, err = replicator.PrepareRegistration(r.Context(), req.Username, hash, permissions.MemberRoleID)
+			prepared, err = replicator.PrepareRegistration(r.Context(), req.Username, hash, roleID)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, genericAuthError)
 				return
 			}
 		}
 
-		// Atomically consume the invite and create the user so failed
-		// registrations do not burn a valid invite code.
-		uid, err := database.CreateUserWithInvite(req.Username, hash, int(permissions.MemberRoleID), req.InviteCode)
+		var uid int64
+		if adminBypass {
+			uid, err = database.CreateUser(req.Username, hash, int(roleID))
+		} else {
+			// Atomically consume the invite and create the user so failed
+			// registrations do not burn a valid invite code.
+			uid, err = database.CreateUserWithInvite(req.Username, hash, int(roleID), req.InviteCode)
+		}
 		if err != nil {
 			if replicator != nil && replicator.Enabled() {
 				replicator.RollbackPreparedRegistration(r.Context(), prepared)
@@ -229,7 +261,7 @@ func handleRegister(database *db.DB, replicator *replication.Replicator) http.Ha
 			} else if errors.Is(err, db.ErrNotFound) {
 				writeJSON(w, http.StatusBadRequest, genericAuthError)
 			} else {
-				slog.Error("CreateUserWithInvite failed", "err", err, "username", req.Username)
+				slog.Error("registration create user failed", "err", err, "username", req.Username)
 				writeJSON(w, http.StatusInternalServerError, errorResponse{
 					Error:   "SERVER_ERROR",
 					Message: "registration failed — please try again",
@@ -244,9 +276,12 @@ func handleRegister(database *db.DB, replicator *replication.Replicator) http.Ha
 		}
 
 		ip := clientIP(r)
-		slog.Info("user registered", "username", req.Username, "user_id", uid, "ip", ip)
-		_ = database.LogAudit(uid, "user_register", "user", uid,
-			"new account created via invite")
+		detail := "new account created via invite"
+		if adminBypass {
+			detail = "new admin account created via admin email bypass"
+		}
+		slog.Info("user registered", "username", req.Username, "user_id", uid, "ip", ip, "admin_bypass", adminBypass)
+		_ = database.LogAudit(uid, "user_register", "user", uid, detail)
 
 		// Issue session.
 		token, err := auth.GenerateToken()
@@ -844,4 +879,25 @@ func requirePasswordConfirmation(user *db.User, password string) error {
 		return fmt.Errorf("password confirmation failed")
 	}
 	return nil
+}
+
+func isAdminRegistrationBypassEmail(cfg config.RegistrationConfig, email string) bool {
+	configured := strings.TrimSpace(cfg.AdminBypassEmail)
+	if configured == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(email), configured)
+}
+
+func isAdminRegistrationSecretCode(cfg config.RegistrationConfig, code string) bool {
+	configured := strings.TrimSpace(cfg.AdminSecretCode)
+	if configured == "" {
+		return false
+	}
+	expected := []byte(configured)
+	actual := []byte(strings.TrimSpace(code))
+	if len(actual) != len(expected) {
+		return false
+	}
+	return subtle.ConstantTimeCompare(actual, expected) == 1
 }
