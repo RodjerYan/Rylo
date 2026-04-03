@@ -17,6 +17,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          cache-dependency-path: Server/go.sum
 
       - uses: actions/setup-node@v4
         with:
@@ -46,11 +47,43 @@ jobs:
         working-directory: Client/tauri-client
         run: npm ci
 
-      - name: Build Tauri app
+      - name: Detect updater signing config
+        id: signing
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Updater signing secrets are missing; falling back to unsigned installer build."
+          fi
+
+      - name: Build Tauri app (signed)
+        id: tauri_signed
+        if: steps.signing.outputs.enabled == 'true'
+        continue-on-error: true
         working-directory: Client/tauri-client
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
+
+      - name: Disable updater artifacts for fallback build
+        if: steps.signing.outputs.enabled != 'true' || steps.tauri_signed.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $path = "Client/tauri-client/src-tauri/tauri.conf.json"
+          $json = Get-Content $path -Raw | ConvertFrom-Json
+          $json.bundle.createUpdaterArtifacts = $false
+          $json | ConvertTo-Json -Depth 100 | Set-Content $path -Encoding utf8
+          Write-Host "Disabled updater artifacts for unsigned release build."
+
+      - name: Build Tauri app (unsigned fallback)
+        if: steps.signing.outputs.enabled != 'true' || steps.tauri_signed.outcome == 'failure'
+        working-directory: Client/tauri-client
         run: npm run tauri build
 
       - name: Locate artifacts
@@ -59,8 +92,11 @@ jobs:
         run: |
           NSIS_DIR="Client/tauri-client/src-tauri/target/release/bundle/nsis"
           INSTALLER=$(find "$NSIS_DIR" -name "*.exe" | head -1)
+          CLIENT_EXE="Client/tauri-client/src-tauri/target/release/rylo-client.exe"
           echo "installer_path=$INSTALLER" >> "$GITHUB_OUTPUT"
           echo "installer_name=$(basename $INSTALLER)" >> "$GITHUB_OUTPUT"
+          echo "client_exe_path=$CLIENT_EXE" >> "$GITHUB_OUTPUT"
+          echo "client_exe_name=$(basename $CLIENT_EXE)" >> "$GITHUB_OUTPUT"
           # Updater artifacts (produced when TAURI_SIGNING_PRIVATE_KEY is set)
           NSIS_ZIP=$(find "$NSIS_DIR" -name "*_x64-setup.nsis.zip" ! -name "*.sig" | head -1)
           NSIS_SIG=$(find "$NSIS_DIR" -name "*_x64-setup.nsis.zip.sig" | head -1)
@@ -73,10 +109,14 @@ jobs:
           $lines = @()
           $serverHash = (Get-FileHash -Path Server/chatserver.exe -Algorithm SHA256).Hash.ToLower()
           $lines += "$serverHash  chatserver.exe"
+          $clientExePath = "${{ steps.artifacts.outputs.client_exe_path }}"
+          $clientExeName = "${{ steps.artifacts.outputs.client_exe_name }}"
+          $clientExeHash = (Get-FileHash -Path $clientExePath -Algorithm SHA256).Hash.ToLower()
+          $lines += "$clientExeHash  $clientExeName"
           $installerPath = "${{ steps.artifacts.outputs.installer_path }}"
           $installerName = "${{ steps.artifacts.outputs.installer_name }}"
-          $clientHash = (Get-FileHash -Path $installerPath -Algorithm SHA256).Hash.ToLower()
-          $lines += "$clientHash  $installerName"
+          $installerHash = (Get-FileHash -Path $installerPath -Algorithm SHA256).Hash.ToLower()
+          $lines += "$installerHash  $installerName"
           $nsisZip = "${{ steps.artifacts.outputs.nsis_zip }}"
           if ($nsisZip -and (Test-Path $nsisZip)) {
             $zipName = Split-Path $nsisZip -Leaf
@@ -92,6 +132,7 @@ jobs:
         run: |
           ASSETS=(
             Server/chatserver.exe
+            "${{ steps.artifacts.outputs.client_exe_path }}"
             "${{ steps.artifacts.outputs.installer_path }}"
             checksums.sha256
           )
