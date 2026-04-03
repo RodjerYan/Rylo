@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Shared helpers and constants for settings tabs.
  */
 

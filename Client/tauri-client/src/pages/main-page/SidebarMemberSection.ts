@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SidebarMemberSection — the collapsible member list panel that sits below
  * channels in "channels" mode. Supports drag-to-resize and persists
  * collapsed state and height to localStorage.

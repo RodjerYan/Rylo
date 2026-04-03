@@ -1,4 +1,4 @@
-﻿import {
+import {
   afterEach,
   beforeEach,
   describe,

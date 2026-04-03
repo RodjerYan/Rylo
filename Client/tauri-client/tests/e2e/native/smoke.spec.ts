@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E smoke tests — verify the real Tauri production app works.
  *
  * These tests launch the actual Rylo exe and connect via CDP.

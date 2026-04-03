@@ -1,4 +1,4 @@
-﻿module github.com/rylo/server
+module github.com/rylo/server
 
 go 1.25.0
 

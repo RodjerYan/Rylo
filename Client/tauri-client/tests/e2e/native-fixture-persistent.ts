@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Persistent Playwright fixture for native E2E tests.
  *
  * Unlike native-fixture.ts (which launches a fresh Tauri exe per test),

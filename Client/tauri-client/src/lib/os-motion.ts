@@ -1,4 +1,4 @@
-﻿/**
+/**
  * OS reduced-motion sync — managed listener with safe re-registration.
  * Extracted to its own module to avoid circular dependencies between
  * SettingsOverlay and AccessibilityTab.

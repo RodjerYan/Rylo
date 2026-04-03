@@ -1,4 +1,4 @@
-﻿package auth_test
+package auth_test
 
 import (
 	"crypto/tls"

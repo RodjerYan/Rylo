@@ -1,4 +1,4 @@
-﻿# Contributing
+# Contributing
 
 How to set up the development environment and contribute to Rylo.
 

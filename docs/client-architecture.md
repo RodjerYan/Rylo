@@ -1,4 +1,4 @@
-﻿# Client Architecture: Tauri v2
+# Client Architecture: Tauri v2
 
 Comprehensive architecture reference for the Rylo Tauri v2 desktop client. Covers project structure, data flow, component system, and subsystems.
 

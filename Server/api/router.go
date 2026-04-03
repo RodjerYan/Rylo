@@ -1,4 +1,4 @@
-﻿// Package api provides the HTTP router and handlers for the Rylo server.
+// Package api provides the HTTP router and handlers for the Rylo server.
 package api
 
 import (

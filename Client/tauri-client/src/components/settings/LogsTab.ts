@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Logs settings tab — log viewer with filtering, level control, live updates.
  */
 

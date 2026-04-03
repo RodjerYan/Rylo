@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E: Authentication flows against the real server.
  *
  * Tests real login, invalid credentials, credential persistence,

@@ -1,4 +1,4 @@
-﻿package admin
+package admin
 
 import "github.com/rylo/server/db"
 

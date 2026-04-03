@@ -1,4 +1,4 @@
-﻿# LiveKit Setup Guide
+# LiveKit Setup Guide
 
 LiveKit is an open-source SFU (Selective Forwarding Unit) that handles real-time voice and video. Rylo uses it instead of rolling its own WebRTC stack -- LiveKit handles all the hard parts (DTLS, ICE, codec negotiation, simulcast) while Rylo manages permissions, state, and room lifecycle.
 

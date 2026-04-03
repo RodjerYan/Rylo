@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // We need to mock livekitSession before importing anything that uses auth.store
 vi.mock("@lib/livekitSession", () => ({

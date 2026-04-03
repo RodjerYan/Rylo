@@ -1,4 +1,4 @@
-﻿package ws_test
+package ws_test
 
 import (
 	"testing"

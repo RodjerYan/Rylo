@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="ru">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rylo — Admin Panel</title>
+<title>Rylo — Панель администратора</title>
 <style>
   :root {
     --bg-tertiary:#1e1f22;--bg-secondary:#2b2d31;--bg-primary:#313338;
@@ -279,6 +279,189 @@ const I={
   logs:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
 };
 
+/* ═══ Russian UI Translation ═══ */
+const RU_TEXT={
+  'Welcome to Rylo':'Добро пожаловать в Rylo',
+  'No accounts exist yet. Create the owner account to get started.':'Пока не создано ни одной учетной записи. Создайте учетную запись владельца, чтобы начать.',
+  'Username':'Имя пользователя',
+  'Password':'Пароль',
+  'Choose a username':'Придумайте имя пользователя',
+  'Min 8 characters':'Минимум 8 символов',
+  'Confirm Password':'Подтвердите пароль',
+  'Re-enter password':'Повторите пароль',
+  'Create Owner Account':'Создать учетную запись владельца',
+  'Setup Complete!':'Настройка завершена!',
+  'Your owner account has been created. Here\'s your invite code:':'Учетная запись владельца создана. Вот ваш код приглашения:',
+  'Copy':'Копировать',
+  'Save this code! Share it with people you want to invite.':'Сохраните этот код! Поделитесь им с теми, кого хотите пригласить.',
+  'Continue to Admin Panel':'Перейти в панель администратора',
+  'Rylo Admin':'Администрирование Rylo',
+  'Sign In':'Войти',
+  'Admin Panel':'Панель администратора',
+  'Admin sections':'Разделы администрирования',
+  'Dashboard':'Панель',
+  'Server overview and statistics':'Обзор сервера и статистика',
+  'View Update':'Открыть обновление',
+  'Total Users':'Всего пользователей',
+  'registered':'зарегистрировано',
+  'Messages':'Сообщения',
+  'total':'всего',
+  'Channels':'Каналы',
+  'active':'активных',
+  'Recent Activity':'Последняя активность',
+  'View All':'Показать все',
+  'Users':'Пользователи',
+  'Invites':'Приглашения',
+  'Settings':'Настройки',
+  'Moderation':'Модерация',
+  'Backups':'Резервные копии',
+  'Updates':'Обновления',
+  'Logout':'Выход',
+  'Owner':'Владелец',
+  'Admin':'Администратор',
+  'Moderator':'Модератор',
+  'Member':'Участник',
+  'Users Online':'Пользователей онлайн',
+  'Messages Today':'Сообщений сегодня',
+  'Voice Active':'Активно в голосе',
+  'connections':'подключений',
+  'Disk Usage':'Использование диска',
+  'CPU':'ЦП',
+  'Uptime':'Время работы',
+  'Online Users':'Пользователи онлайн',
+  'Search users...':'Поиск пользователей...',
+  'All roles':'Все роли',
+  'All statuses':'Все статусы',
+  'Role':'Роль',
+  'Status':'Статус',
+  'Created':'Создан',
+  'Last Seen':'Последний вход',
+  'No users found':'Пользователи не найдены',
+  'Banned':'Заблокирован',
+  'Online':'В сети',
+  'Offline':'Не в сети',
+  'Create Invite':'Создать приглашение',
+  'Invite Code':'Код приглашения',
+  'Expires':'Истекает',
+  'Never':'Никогда',
+  'Used':'Использовано',
+  'Max Uses':'Макс. использований',
+  'Security':'Безопасность',
+  'Settings saved':'Настройки сохранены',
+  'Live log stream':'Поток журналов',
+  'Pause':'Пауза',
+  'Resume':'Продолжить',
+  'Clear':'Очистить',
+  'Search logs...':'Поиск по журналам...',
+  'Update Available':'Доступно обновление',
+  'Current':'Текущая версия',
+  'Database backup and restore':'Резервное копирование и восстановление базы данных',
+  'Manual Backup':'Ручная копия',
+  'Running...':'Выполняется...',
+  'Create Backup Now':'Создать резервную копию',
+  'Schedule':'Расписание',
+  'Configure backup schedule in Settings.':'Настройте расписание резервного копирования в разделе «Настройки».',
+  'Go to Settings':'Перейти в настройки',
+  'Backup History':'История резервных копий',
+  'Filename':'Имя файла',
+  'Size':'Размер',
+  'Date':'Дата',
+  'Actions':'Действия',
+  'No backups found':'Резервные копии не найдены',
+  'Signed out':'Вы вышли',
+  'Delete':'Удалить',
+  'Restore':'Восстановить',
+  'Save':'Сохранить',
+  'Cancel':'Отмена',
+  'Logs':'Журналы',
+  'Clear Logs':'Очистить журналы',
+  'Refresh':'Обновить',
+  'Voice Diagnostics':'Диагностика голоса',
+  'Refresh Diagnostics':'Обновить диагностику',
+  'Copy Diagnostics':'Скопировать диагностику',
+  'Username and password are required.':'Имя пользователя и пароль обязательны.',
+  'Passwords do not match.':'Пароли не совпадают.',
+  'Username must be at least 2 characters.':'Имя пользователя должно содержать не менее 2 символов.',
+  'Password must be at least 8 characters.':'Пароль должен содержать не менее 8 символов.',
+  'invalid credentials':'Неверные учетные данные',
+  'access denied':'Доступ запрещен',
+  'not authenticated':'Требуется авторизация',
+  'internal server error':'Внутренняя ошибка сервера',
+  'failed to create invite':'Не удалось создать приглашение',
+  'failed to list invites':'Не удалось получить список приглашений',
+  'failed to revoke invite':'Не удалось отозвать приглашение',
+  'failed to list channels':'Не удалось получить список каналов',
+  'failed to create backup':'Не удалось создать резервную копию',
+  'failed to delete backup':'Не удалось удалить резервную копию',
+};
+const RU_RULES=[
+  [/^Update Available:\s*(.+)$/,(_m,v)=>'Доступно обновление: '+v],
+  [/^Current:\s*(.+)$/,(_m,v)=>'Текущая версия: '+v],
+  [/^of (\d+) total$/,(_m,v)=>'из '+v+' всего'],
+  [/^Update v(.+) available$/,(_m,v)=>'Доступно обновление v'+v],
+  [/^(\d+)\s+online$/,(_m,v)=>v+' онлайн'],
+];
+const RU_ATTRS=new Set(['placeholder','title','aria-label']);
+function shouldSkipAdminTranslation(value){
+  return !value||/^(https?:\/\/|wss?:\/\/)/i.test(value)||/^[\w.-]+:\d+$/.test(value)||/^[A-Fa-f0-9:]{16,}$/.test(value)||/^[A-Z0-9_-]{16,}$/.test(value)||value.includes('localhost')||value.includes('.com')||value.includes('.net');
+}
+function splitAdminPadding(value){
+  const match=/^(\s*)(.*?)(\s*)$/s.exec(value)||['', '', value, ''];
+  return{leading:match[1]||'',core:match[2]||value,trailing:match[3]||''};
+}
+function trAdmin(value){
+  const parts=splitAdminPadding(value);
+  if(parts.core===''||shouldSkipAdminTranslation(parts.core))return value;
+  if(Object.prototype.hasOwnProperty.call(RU_TEXT,parts.core)){
+    return parts.leading+RU_TEXT[parts.core]+parts.trailing;
+  }
+  for(const [pattern,replace] of RU_RULES){
+    if(pattern.test(parts.core)){
+      return parts.leading+parts.core.replace(pattern,replace)+parts.trailing;
+    }
+  }
+  return value;
+}
+function trAdminAttr(name,value){
+  return RU_ATTRS.has(name)?trAdmin(value):value;
+}
+function translateAdminNode(node){
+  if(node.nodeType===Node.TEXT_NODE){
+    const next=trAdmin(node.nodeValue||'');
+    if(next!==(node.nodeValue||''))node.nodeValue=next;
+    return;
+  }
+  if(node.nodeType===Node.ELEMENT_NODE){
+    for(const attr of RU_ATTRS){
+      const value=node.getAttribute(attr);
+      if(value!==null){
+        const next=trAdminAttr(attr,value);
+        if(next!==value)node.setAttribute(attr,next);
+      }
+    }
+  }
+  for(const child of Array.from(node.childNodes))translateAdminNode(child);
+}
+function installAdminTranslations(){
+  translateAdminNode(document.body);
+  const observer=new MutationObserver(records=>{
+    records.forEach(record=>{
+      if(record.type==='characterData'&&record.target.nodeType===Node.TEXT_NODE){
+        translateAdminNode(record.target);
+        return;
+      }
+      if(record.type==='attributes'&&record.target.nodeType===Node.ELEMENT_NODE){
+        translateAdminNode(record.target);
+        return;
+      }
+      Array.from(record.addedNodes).forEach(translateAdminNode);
+    });
+  });
+  observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:Array.from(RU_ATTRS)});
+  return observer;
+}
+const adminTranslationObserver=installAdminTranslations();
+
 /* ═══ State ═══ */
 const PAGE_SIZE=50;
 const state={section:'dashboard',token:localStorage.getItem('admin_token')||'',
@@ -304,10 +487,11 @@ function fmtBytes(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed
 function actionBadge(a){if(!a)return'badge-muted';if(a.includes('ban')||a.includes('kick')||a.includes('delete'))return'badge-red';if(a.includes('create'))return'badge-green';if(a.includes('update'))return'badge-yellow';return'badge-accent'}
 function actionColor(a){if(!a)return'var(--accent)';if(a.includes('ban')||a.includes('kick')||a.includes('delete'))return'var(--red)';if(a.includes('create'))return'var(--green)';if(a.includes('update'))return'var(--yellow)';return'var(--accent)'}
 function roleColor(rid){return{1:'var(--role-owner)',2:'var(--role-admin)',3:'var(--role-mod)'}[rid]||'var(--role-member)'}
-function roleName(rid){return{1:'Owner',2:'Admin',3:'Moderator',4:'Member'}[rid]||'Member'}
+function roleName(rid){return{1:'Владелец',2:'Администратор',3:'Модератор',4:'Участник'}[rid]||'Участник'}
 
 function showToast(msg,type='success'){
   const t=document.getElementById('toast');
+  msg=trAdmin(msg);
   t.className='toast visible '+type;
   t.innerHTML=(type==='success'?I.check:type==='error'?I.ban:I.check)+'<span>'+esc(msg)+'</span>';
   clearTimeout(window._tt);window._tt=setTimeout(()=>t.classList.remove('visible'),3000);

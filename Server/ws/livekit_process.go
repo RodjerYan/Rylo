@@ -1,4 +1,4 @@
-﻿// Package ws provides the LiveKit companion process manager.
+// Package ws provides the LiveKit companion process manager.
 //
 // LiveKitProcess manages the lifecycle of a livekit-server binary running
 // alongside chatserver. It auto-generates a minimal livekit.yaml config,

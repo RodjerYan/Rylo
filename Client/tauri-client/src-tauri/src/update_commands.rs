@@ -1,4 +1,4 @@
-﻿use serde::Serialize;
+use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
 

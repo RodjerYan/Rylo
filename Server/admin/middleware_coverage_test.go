@@ -1,4 +1,4 @@
-﻿package admin_test
+package admin_test
 
 // Additional tests to increase branch coverage on adminAuthMiddleware,
 // ownerOnlyMiddleware, and related helpers.

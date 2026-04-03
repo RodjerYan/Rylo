@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Common test utilities for Rylo Tauri client tests.
  * Provides store reset and async store waiting helpers.
  */

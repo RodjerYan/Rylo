@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SidebarArea — unified sidebar DOM construction and component wiring.
  * Composes a server header, ChannelSidebar or DmSidebar (based on store mode),
  * VoiceWidget, and UserBar. The ServerStrip has been removed in favor of the

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * File attachment rendering and image caching (memory + IndexedDB).
  * Also owns the server host state and URL resolution used by other modules.
  */

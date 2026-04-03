@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Theme manager for Rylo.
  *
  * Built-in themes are applied via body CSS class (e.g. `theme-dark`).

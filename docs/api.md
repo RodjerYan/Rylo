@@ -1,4 +1,4 @@
-﻿# REST API Reference
+# REST API Reference
 
 Rylo server REST API reference. All endpoints use the base URL `https://{server}:{port}/api/v1`.
 

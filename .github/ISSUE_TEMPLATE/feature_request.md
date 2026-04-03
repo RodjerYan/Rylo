@@ -1,4 +1,4 @@
-﻿---
+---
 name: Feature Request
 about: Suggest a new feature for Rylo
 title: "feat: "

@@ -1,4 +1,4 @@
-﻿// =============================================================================
+// =============================================================================
 // Rylo Protocol Types
 // All WebSocket message types, REST response types, and permission definitions.
 // Source of truth: PROTOCOL.md, API.md, SCHEMA.md

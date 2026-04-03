@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Credential storage — wraps Tauri IPC commands for Windows Credential Manager.
  * Falls back to no-op in non-Tauri environments (tests, browser).
  */

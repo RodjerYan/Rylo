@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Custom Playwright fixture for testing the real Tauri production app.
  *
  * Launches the built Rylo exe with WebView2 remote debugging enabled,

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E: Channel navigation with real server data.
  *
  * Tests switching between channels, verifying header updates,

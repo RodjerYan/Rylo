@@ -1,4 +1,4 @@
-﻿/**
+/**
  * QuickSwitchOverlay — modal for switching between saved server profiles.
  * Appears when the user clicks the disconnect/switch button in UserBar.
  * Uses @lib/dom helpers exclusively. Never sets innerHTML with user content.

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E: Main app layout after real login.
  *
  * Verifies all major UI sections render correctly when connected

@@ -1,4 +1,4 @@
-﻿// LiveKit Session — lifecycle orchestrator for voice chat via LiveKit
+// LiveKit Session — lifecycle orchestrator for voice chat via LiveKit
 import {
   Room,
   RoomEvent,

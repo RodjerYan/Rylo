@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Generic reactive store foundation for Rylo Tauri client.
  * Immutable state updates only — setState receives an updater
  * that must return a NEW state object.

@@ -1,4 +1,4 @@
-﻿// updater.ts — Client auto-update service.
+// updater.ts — Client auto-update service.
 // Uses custom Tauri commands that build the updater with a dynamic server URL
 // at runtime (required because Rylo is self-hosted).
 

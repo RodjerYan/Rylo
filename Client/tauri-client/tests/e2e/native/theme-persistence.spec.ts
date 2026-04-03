@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E: Theme Persistence — real app theme switching and accent color.
  *
  * Tests that theme changes, accent color overrides, and compact mode

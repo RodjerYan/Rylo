@@ -1,4 +1,4 @@
-﻿package admin_test
+package admin_test
 
 // Targeted tests to boost coverage to 80%+ by exercising uncovered branches.
 

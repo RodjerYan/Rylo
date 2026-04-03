@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Date/time formatting helpers and message grouping logic.
  * Pure functions for timestamp parsing, display formatting, and role resolution.
  */
@@ -30,39 +30,39 @@ export function formatTime(iso: string): string {
 }
 
 export function formatFullDate(iso: string): string {
-  return parseTimestamp(iso).toLocaleDateString("en-US", {
+  return parseTimestamp(iso).toLocaleDateString("ru-RU", {
     year: "numeric",
     month: "long",
     day: "numeric",
   });
 }
 
-/** Discord-style relative timestamp: "Today at 2:34 PM", "Yesterday at 2:34 PM",
- *  or "MM/DD/YYYY H:MM AM/PM" for older dates. */
+/** Discord-style relative timestamp: "Сегодня в 14:34", "Вчера в 14:34",
+ *  or "DD.MM.YYYY HH:MM" for older dates. */
 export function formatMessageTimestamp(iso: string): string {
   const date = parseTimestamp(iso);
   const now = new Date();
 
-  const timeStr = date.toLocaleTimeString("en-US", {
-    hour: "numeric",
+  const timeStr = date.toLocaleTimeString("ru-RU", {
+    hour: "2-digit",
     minute: "2-digit",
-    hour12: true,
+    hour12: false,
   });
 
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterdayStart = new Date(todayStart.getTime() - 86_400_000);
 
   if (date >= todayStart) {
-    return `Today at ${timeStr}`;
+    return `Сегодня в ${timeStr}`;
   }
   if (date >= yesterdayStart) {
-    return `Yesterday at ${timeStr}`;
+    return `Вчера в ${timeStr}`;
   }
 
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
   const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
   const yyyy = date.getFullYear();
-  return `${mm}/${dd}/${yyyy} ${timeStr}`;
+  return `${dd}.${mm}.${yyyy} ${timeStr}`;
 }
 
 export function isSameDay(a: string, b: string): boolean {

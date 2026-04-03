@@ -1,4 +1,4 @@
-﻿// Package api provides the HTTP router and handlers for the Rylo server.
+// Package api provides the HTTP router and handlers for the Rylo server.
 //
 // client_update.go serves Tauri-compatible update metadata so the desktop
 // client can check for new versions and self-update.

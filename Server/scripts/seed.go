@@ -1,4 +1,4 @@
-﻿// seed.go is a standalone tool that populates an Rylo database with
+// seed.go is a standalone tool that populates an Rylo database with
 // development data (users, channels, messages, DMs). It is idempotent:
 // running it multiple times against the same database is safe.
 //

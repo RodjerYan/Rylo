@@ -1,4 +1,4 @@
-﻿// Local TCP-to-TLS proxy for LiveKit signal connections.
+// Local TCP-to-TLS proxy for LiveKit signal connections.
 //
 // Problem: The LiveKit JS SDK opens its own WebSocket from WebView2 directly.
 // WebView2's native fetch/WS rejects self-signed TLS certificates, so remote

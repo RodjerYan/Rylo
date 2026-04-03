@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createDmSidebar } from "../../src/components/DmSidebar";
 import type { DmConversation } from "../../src/components/DmSidebar";
 

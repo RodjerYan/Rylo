@@ -1,4 +1,4 @@
-﻿/**
+/**
  * UI store — holds transient UI state: sidebar, modals, theme, collapsed categories.
  * Immutable state updates only.
  */

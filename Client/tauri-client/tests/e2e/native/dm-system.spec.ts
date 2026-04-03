@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E: DM System — real server DM flow.
  *
  * Tests opening DMs from the member list, sidebar mode switching,

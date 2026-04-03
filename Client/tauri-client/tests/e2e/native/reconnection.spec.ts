@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E: Reconnection — basic connection state verification.
  *
  * Tests are intentionally conservative since we cannot easily kill/restart

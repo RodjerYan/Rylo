@@ -1,4 +1,4 @@
-﻿// Package ws provides the WebSocket hub and client management for Rylo.
+// Package ws provides the WebSocket hub and client management for Rylo.
 package ws
 
 import (

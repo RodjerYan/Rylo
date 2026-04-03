@@ -1,4 +1,4 @@
-﻿// Package migrations holds embedded SQL migration files for the Rylo server.
+// Package migrations holds embedded SQL migration files for the Rylo server.
 package migrations
 
 import "embed"

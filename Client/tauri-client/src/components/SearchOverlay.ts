@@ -46,8 +46,8 @@ export function createSearchOverlay(options: SearchOverlayOptions): MountableCom
   function formatTimestamp(ts: string): string {
     try {
       const d = new Date(ts);
-      return d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
-        + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+      return d.toLocaleDateString("ru-RU", { month: "short", day: "numeric" })
+        + " " + d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
     } catch {
       return ts;
     }

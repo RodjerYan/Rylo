@@ -1,4 +1,4 @@
-﻿// Package config provides configuration loading for the Rylo server.
+// Package config provides configuration loading for the Rylo server.
 package config
 
 import (

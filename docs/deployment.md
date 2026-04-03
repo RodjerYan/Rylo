@@ -1,4 +1,4 @@
-﻿# Deployment Guide
+# Deployment Guide
 
 Production deployment guide for Rylo server on Windows.
 

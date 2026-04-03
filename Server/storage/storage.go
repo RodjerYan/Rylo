@@ -1,4 +1,4 @@
-﻿// Package storage handles file upload validation and storage for the Rylo server.
+// Package storage handles file upload validation and storage for the Rylo server.
 package storage
 
 import (

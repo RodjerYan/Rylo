@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E: Voice channel controls with real app.
  *
  * Tests voice channel UI, mute/deafen buttons, voice widget rendering,

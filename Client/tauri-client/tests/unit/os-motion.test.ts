@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { syncOsMotionListener } from "../../src/lib/os-motion";
 
 describe("syncOsMotionListener", () => {

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Mocked E2E: Theme Persistence — theme switching, accent color,
  * and compact mode.
  *

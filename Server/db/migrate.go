@@ -1,4 +1,4 @@
-﻿package db
+package db
 
 // migrate.go — tracked migration runner for the Rylo server.
 //

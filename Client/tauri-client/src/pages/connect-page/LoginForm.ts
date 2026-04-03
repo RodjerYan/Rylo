@@ -1,4 +1,4 @@
-﻿// LoginForm — login/register form sub-component for ConnectPage.
+// LoginForm — login/register form sub-component for ConnectPage.
 // Pure extraction from ConnectPage.ts. No behavior changes.
 
 import {

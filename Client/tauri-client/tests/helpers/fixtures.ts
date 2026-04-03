@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Test data factories for Rylo protocol types.
  * Every factory returns a new object with sensible defaults.
  * Pass partial overrides to customize individual fields.

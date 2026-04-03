@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Advanced settings tab — developer mode, hardware acceleration, debug tools,
  * and cache management.
  */

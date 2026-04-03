@@ -1,4 +1,4 @@
-﻿// Package ws provides the LiveKit integration client.
+// Package ws provides the LiveKit integration client.
 //
 // LiveKitClient wraps the LiveKit server SDK for token generation and
 // room management. It is the primary interface between Rylo's WS

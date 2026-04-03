@@ -1,4 +1,4 @@
-﻿# Port Forwarding Guide
+# Port Forwarding Guide
 
 How to make your Rylo server accessible to friends outside your local network.
 

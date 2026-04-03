@@ -1,4 +1,4 @@
-﻿// Rylo Tauri v2 Client — Entry Point
+// Rylo Tauri v2 Client — Entry Point
 
 import "@styles/tokens.css";
 import "@styles/base.css";
@@ -29,6 +29,7 @@ import { initWindowState } from "@lib/window-state";
 import { createCertMismatchModal } from "@components/CertMismatchModal";
 import { createProfileManager, createTauriBackend } from "@lib/profiles";
 import type { CertTofuEvent } from "@lib/ws";
+import { installRussianUiTranslations } from "@lib/i18n";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -63,6 +64,8 @@ document.addEventListener("click", (e) => {
 // Install global error handlers first
 installGlobalErrorHandlers();
 
+document.documentElement.lang = "ru";
+
 // Apply stored theme/font/compact preferences before first render
 applyStoredAppearance();
 
@@ -76,6 +79,8 @@ const appEl = document.getElementById("app");
 if (!appEl) {
   throw new Error("Missing #app element");
 }
+
+const uiTranslationObserver = installRussianUiTranslations(document.body);
 
 // Create core services
 const router = createRouter("connect");
@@ -449,6 +454,7 @@ window.addEventListener("beforeunload", () => {
   }
   // Flush any buffered log entries to disk before the window closes.
   void flushLogs();
+  uiTranslationObserver.disconnect();
 });
 
 // Initial render

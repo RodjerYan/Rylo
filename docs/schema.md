@@ -1,4 +1,4 @@
-﻿# Database Schema Reference
+# Database Schema Reference
 
 Rylo uses a single SQLite database file (`data/chatserver.db`) with the pure-Go driver `modernc.org/sqlite` (no CGO). Migrations run automatically on startup.
 

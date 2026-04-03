@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Link preview / Open Graph tag rendering — fetches and displays OG metadata
  * (title, description, image) for generic URLs as compact link cards.
  */

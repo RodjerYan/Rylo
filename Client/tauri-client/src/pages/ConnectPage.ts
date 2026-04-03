@@ -1,4 +1,4 @@
-﻿// ConnectPage — login/register page component.
+// ConnectPage — login/register page component.
 // Thin composition shell that wires ServerPanel and LoginForm together.
 
 import { createElement, appendChildren } from "@lib/dom";

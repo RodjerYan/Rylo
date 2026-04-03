@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Preference persistence helpers.
  *
  * Moved here from `@components/settings/helpers` so that `lib/` modules can

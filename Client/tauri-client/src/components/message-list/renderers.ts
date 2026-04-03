@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Message rendering barrel — re-exports all rendering helpers and contains
  * the composite functions (renderMessage, renderDayDivider, renderReplyRef,
  * renderSystemMessage) that orchestrate pieces from the split modules.

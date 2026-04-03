@@ -1,4 +1,4 @@
-﻿// export_test.go exposes unexported functions and methods for use in external
+// export_test.go exposes unexported functions and methods for use in external
 // test packages (package ws_test). This file is compiled only during "go test".
 package ws
 

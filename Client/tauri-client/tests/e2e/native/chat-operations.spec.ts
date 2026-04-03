@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E: Chat operations with real server.
  *
  * Tests sending messages, receiving echoes, message display,

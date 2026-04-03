@@ -1,4 +1,4 @@
-﻿// Package admin whitebox tests — uses package admin (not admin_test) to access
+// Package admin whitebox tests — uses package admin (not admin_test) to access
 // unexported functions like spawnDetached and ownerOnlyMiddleware.
 package admin
 

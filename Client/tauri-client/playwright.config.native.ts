@@ -1,4 +1,4 @@
-﻿import { defineConfig } from "@playwright/test";
+import { defineConfig } from "@playwright/test";
 
 /**
  * Playwright config for testing against the REAL Tauri production app.

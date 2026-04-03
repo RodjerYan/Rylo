@@ -1,4 +1,4 @@
-﻿package db_test
+package db_test
 
 // migrate_test.go — TDD tests for the tracked migration system.
 //

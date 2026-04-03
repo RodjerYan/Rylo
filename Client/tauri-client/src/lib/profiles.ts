@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Server profiles management module.
  *
  * Manages saved server connection profiles for the Rylo login page.

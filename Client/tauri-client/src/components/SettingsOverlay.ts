@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SettingsOverlay component — full-screen overlay with tabbed settings panels.
  * Tabs: Account, Appearance, Notifications, Text & Images, Accessibility, Voice & Audio, Keybinds, Advanced, Logs.
  * Subscribes to uiStore for settingsOpen state.

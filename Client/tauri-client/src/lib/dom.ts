@@ -2,6 +2,8 @@
 // NEVER use innerHTML with user-provided content.
 // All user content must go through these helpers.
 
+import { translateAttributeValue, translateText } from "@lib/i18n";
+
 /**
  * Escape HTML special characters to prevent XSS.
  * Use this when building HTML strings that include user data.
@@ -27,15 +29,16 @@ export function createElement<K extends keyof HTMLElementTagNameMap>(
   const el = document.createElement(tag);
   if (attrs) {
     for (const [key, value] of Object.entries(attrs)) {
+      const translatedValue = translateAttributeValue(key, value);
       if (key === "class") {
-        el.className = value;
+        el.className = translatedValue;
       } else {
-        el.setAttribute(key, value);
+        el.setAttribute(key, translatedValue);
       }
     }
   }
   if (textContent !== undefined) {
-    el.textContent = textContent;
+    el.textContent = translateText(textContent);
   }
   return el;
 }
@@ -45,7 +48,7 @@ export function createElement<K extends keyof HTMLElementTagNameMap>(
  * Always prefer this over innerHTML for user content.
  */
 export function setText(el: Element, text: string): void {
-  el.textContent = text;
+  el.textContent = translateText(text);
 }
 
 /**
@@ -57,7 +60,7 @@ export function appendChildren(
 ): void {
   for (const child of children) {
     if (typeof child === "string") {
-      parent.appendChild(document.createTextNode(child));
+      parent.appendChild(document.createTextNode(translateText(child)));
     } else {
       parent.appendChild(child);
     }

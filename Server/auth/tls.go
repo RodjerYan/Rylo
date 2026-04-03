@@ -1,4 +1,4 @@
-﻿// Package auth provides authentication and TLS helpers for the Rylo server.
+// Package auth provides authentication and TLS helpers for the Rylo server.
 package auth
 
 import (

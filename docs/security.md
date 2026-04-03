@@ -1,4 +1,4 @@
-﻿# Security Policy
+# Security Policy
 
 Security guidelines and vulnerability reporting for Rylo.
 

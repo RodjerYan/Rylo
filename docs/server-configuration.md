@@ -1,4 +1,4 @@
-﻿# Server Configuration Reference
+# Server Configuration Reference
 
 Complete reference for all Rylo server configuration options.
 

@@ -1,4 +1,4 @@
-﻿// Package admin provides the embedded admin panel static file server and the
+// Package admin provides the embedded admin panel static file server and the
 // admin REST API for the Rylo server.
 package admin
 

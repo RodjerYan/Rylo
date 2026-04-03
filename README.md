@@ -1,4 +1,4 @@
-﻿# Rylo
+# Rylo
 
 *The gaming chat platform you actually own.*
 

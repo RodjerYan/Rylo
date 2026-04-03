@@ -1,4 +1,4 @@
-﻿package ws_test
+package ws_test
 
 // coverage_boost_test.go adds tests for functions with 0% or low coverage
 // to push the ws package above 80%.

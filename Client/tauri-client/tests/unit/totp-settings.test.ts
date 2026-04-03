@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createSettingsOverlay } from "@components/SettingsOverlay";
 import type { SettingsOverlayOptions } from "@components/SettingsOverlay";
 import { updateUser } from "@stores/auth.store";

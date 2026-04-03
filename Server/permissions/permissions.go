@@ -1,4 +1,4 @@
-﻿// Package permissions provides the canonical permission bit constants and
+// Package permissions provides the canonical permission bit constants and
 // role ID constants for the Rylo server. All other packages must import
 // from here instead of defining their own local copies.
 package permissions

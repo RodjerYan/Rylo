@@ -1,4 +1,4 @@
-﻿use serde::Serialize;
+use serde::Serialize;
 use std::ptr;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::ERROR_NOT_FOUND;

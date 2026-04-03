@@ -1,4 +1,4 @@
-﻿// Rylo chat server — self-hosted, Windows-native.
+// Rylo chat server — self-hosted, Windows-native.
 // Build: go build -o chatserver.exe -ldflags "-s -w -X main.version=1.0.0" .
 package main
 

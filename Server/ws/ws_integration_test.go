@@ -1,4 +1,4 @@
-﻿package ws_test
+package ws_test
 
 // ws_integration_test.go covers ServeWS, authenticateConn, writePump, and
 // readPump by spinning up a real httptest server and dialing it with the

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Reusable DOM test harness for Rylo component unit tests.
  *
  * Eliminates repeated container creation / teardown boilerplate.

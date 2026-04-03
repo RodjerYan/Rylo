@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Appearance settings tab — theme, font size, compact mode.
  */
 

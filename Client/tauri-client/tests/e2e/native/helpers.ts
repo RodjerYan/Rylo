@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Shared helpers for native E2E tests.
  *
  * Unlike mocked helpers, these interact with the REAL Tauri app + server.

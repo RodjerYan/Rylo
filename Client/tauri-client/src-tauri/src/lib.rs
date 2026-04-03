@@ -1,8 +1,11 @@
+use tauri::Manager;
+
 mod commands;
 mod credentials;
 mod hotkeys;
 mod livekit_proxy;
 mod ptt;
+mod server_process;
 mod tray;
 mod update_commands;
 mod ws_proxy;
@@ -21,6 +24,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(ws_proxy::WsState::new())
         .manage(livekit_proxy::LiveKitProxyState::new())
+        .manage(server_process::ServerProcessState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::save_settings,
@@ -53,6 +57,8 @@ pub fn run() {
             .format_timestamp_millis()
             .try_init();
 
+            let server_state = app.state::<server_process::ServerProcessState>();
+            server_process::ensure_server_running(&app.handle(), &server_state);
             tray::create_tray(app.handle())?;
             Ok(())
         })

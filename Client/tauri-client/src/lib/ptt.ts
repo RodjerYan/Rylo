@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Push-to-Talk service — uses Rust-side GetAsyncKeyState polling so the
  * PTT key is NOT consumed/hijacked. Other apps and chat input continue
  * to receive the key normally. Works even when Rylo is unfocused.

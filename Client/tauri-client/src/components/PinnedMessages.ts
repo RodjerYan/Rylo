@@ -29,7 +29,7 @@ export interface PinnedMessagesOptions {
 function formatPinTime(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString("ru-RU", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function getInitial(name: string): string {

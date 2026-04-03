@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E: Overlay features (Quick Switcher, Emoji Picker, Invites, Pins).
  *
  * Tests overlay open/close behavior, keyboard shortcuts, and content

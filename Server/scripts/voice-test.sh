@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # voice-test.sh — LiveKit voice integration smoke test
 #
 # Prerequisites:

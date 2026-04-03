@@ -1,4 +1,4 @@
-﻿import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 const mockSwitchInputDevice = vi.fn().mockResolvedValue(undefined);
 const mockSwitchOutputDevice = vi.fn().mockResolvedValue(undefined);

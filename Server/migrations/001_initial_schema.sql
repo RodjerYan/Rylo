@@ -1,4 +1,4 @@
-﻿-- Migration 001: Initial schema
+-- Migration 001: Initial schema
 -- All tables for the Rylo server database.
 
 -- Roles must be created before users (foreign key dependency).

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Native E2E: Settings overlay with real app.
  *
  * Tests opening/closing settings, tab navigation, theme changes,

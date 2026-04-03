@@ -1,4 +1,4 @@
-﻿// Package db provides database access for the Rylo server.
+// Package db provides database access for the Rylo server.
 // It uses modernc.org/sqlite — a pure-Go SQLite driver requiring no CGO.
 package db
 
