@@ -157,12 +157,13 @@ export function renderMessage(
 
   const role = getUserRole(msg.user.id);
   const initial = msg.user.username.charAt(0).toUpperCase();
+  const avatarPath = typeof msg.user.avatar === "string" ? msg.user.avatar.trim() : "";
   const avatar = createElement("div", {
     class: "msg-avatar",
     style: `background: ${roleColorVar(role)}`,
   }, initial);
-  if (msg.user.avatar !== null && msg.user.avatar.trim() !== "") {
-    const resolvedAvatar = resolveServerUrl(msg.user.avatar.trim());
+  if (avatarPath !== "") {
+    const resolvedAvatar = resolveServerUrl(avatarPath);
     if (isSafeUrl(resolvedAvatar)) {
       void fetchImageAsDataUrl(resolvedAvatar).then((dataUrl) => {
         if (signal.aborted || dataUrl === null || dataUrl.trim() === "") {

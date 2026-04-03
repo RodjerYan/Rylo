@@ -1,4 +1,4 @@
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 
 mod commands;
 mod credentials;
@@ -12,7 +12,7 @@ mod ws_proxy;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
@@ -61,6 +61,13 @@ pub fn run() {
             tray::create_tray(app.handle())?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+            let server_state = app_handle.state::<server_process::ServerProcessState>();
+            server_process::shutdown_server(&server_state);
+        }
+    });
 }

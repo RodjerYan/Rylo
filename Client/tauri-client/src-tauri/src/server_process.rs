@@ -21,9 +21,7 @@ pub struct ServerProcessState {
 impl Drop for ServerProcessState {
     fn drop(&mut self) {
         if let Ok(mut guard) = self.child.lock() {
-            if let Some(child) = guard.as_mut() {
-                let _ = child.kill();
-            }
+            terminate_child(guard.as_mut());
             guard.take();
         }
     }
@@ -92,6 +90,19 @@ pub fn ensure_server_running<R: Runtime>(app: &AppHandle<R>, state: &ServerProce
             );
         }
     }
+}
+
+pub fn shutdown_server(state: &ServerProcessState) {
+    let mut guard = match state.child.lock() {
+        Ok(guard) => guard,
+        Err(err) => {
+            log::error!("failed to lock local server process state for shutdown: {err}");
+            return;
+        }
+    };
+
+    terminate_child(guard.as_mut());
+    guard.take();
 }
 
 fn is_server_listening(addr: &str) -> bool {
@@ -170,6 +181,13 @@ fn append_server_binary_candidates(candidates: &mut Vec<PathBuf>, base_dir: &Pat
 fn push_unique_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
     if !candidates.iter().any(|candidate| candidate == &path) {
         candidates.push(path);
+    }
+}
+
+fn terminate_child(child: Option<&mut Child>) {
+    if let Some(child) = child {
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 

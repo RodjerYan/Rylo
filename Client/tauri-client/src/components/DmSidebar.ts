@@ -66,6 +66,7 @@ function renderDmItem(
   const avatarBg = convo.avatarColor ?? "#5865F2";
   const avatar = createElement("div", { class: "dm-avatar" });
   avatar.style.background = avatarBg;
+  const avatarPath = typeof convo.avatar === "string" ? convo.avatar.trim() : "";
 
   const appendFallback = (): void => {
     clearChildren(avatar);
@@ -78,8 +79,8 @@ function renderDmItem(
   const statusDot = createElement("span", { class: "dm-status" });
   statusDot.style.background = STATUS_COLORS[statusKey] ?? "var(--text-micro)";
 
-  if (convo.avatar !== null && convo.avatar.trim() !== "") {
-    const resolvedAvatar = resolveServerUrl(convo.avatar.trim());
+  if (avatarPath !== "") {
+    const resolvedAvatar = resolveServerUrl(avatarPath);
     if (isSafeUrl(resolvedAvatar)) {
       void fetchImageAsDataUrl(resolvedAvatar).then((dataUrl) => {
         if (signal.aborted || dataUrl === null || dataUrl.trim() === "") {

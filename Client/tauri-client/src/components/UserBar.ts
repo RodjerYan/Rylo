@@ -34,7 +34,7 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
     const user = state.user;
     const username = user?.username ?? "Unknown";
     const profileId = user?.profile_id ?? user?.id ?? 0;
-    const avatar = user?.avatar ?? null;
+    const avatar = typeof user?.avatar === "string" ? user.avatar.trim() : "";
     const initial = username.charAt(0).toUpperCase() || "?";
 
     if (avatarEl !== null && avatarTextEl !== null) {
@@ -62,8 +62,8 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
         avatarEl.appendChild(statusDot);
       };
 
-      if (avatar !== null && avatar.trim() !== "") {
-        const resolved = resolveServerUrl(avatar.trim());
+      if (avatar !== "") {
+        const resolved = resolveServerUrl(avatar);
         if (isSafeUrl(resolved)) {
           void fetchImageAsDataUrl(resolved).then((dataUrl) => {
             if (avatarEl === null || requestId !== avatarRequestSeq || dataUrl === null || dataUrl.trim() === "") {

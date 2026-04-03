@@ -8,7 +8,7 @@ import { createStore } from "@lib/store";
 export interface DmUser {
   readonly id: number;
   readonly username: string;
-  readonly avatar: string;
+  readonly avatar: string | null;
   readonly status: string;
   readonly lastSeen?: string | null;
 }

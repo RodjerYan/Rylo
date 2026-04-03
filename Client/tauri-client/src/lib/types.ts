@@ -314,7 +314,7 @@ export interface MemberBanPayload {
 export interface DmRecipient {
   readonly id: number;
   readonly username: string;
-  readonly avatar: string;
+  readonly avatar: string | null;
   readonly status: string;
   readonly last_seen?: string | null;
 }
