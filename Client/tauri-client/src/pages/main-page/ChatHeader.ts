@@ -68,12 +68,16 @@ export function buildChatHeader(
 
 export function updateChatHeaderForDm(
   refs: ChatHeaderRefs,
-  recipient: { username: string; status: string } | null,
+  recipient: { username: string; status: string; profileID?: number } | null,
 ): void {
   if (recipient !== null) {
     setText(refs.hashEl, "@");
     setText(refs.nameEl, recipient.username);
-    setText(refs.topicEl, recipient.status);
+    if (recipient.profileID !== undefined) {
+      setText(refs.topicEl, `ID: ${recipient.profileID} • ${recipient.status}`);
+    } else {
+      setText(refs.topicEl, recipient.status);
+    }
   } else {
     setText(refs.hashEl, "#");
   }

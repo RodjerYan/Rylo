@@ -17,6 +17,9 @@ export interface WindowState {
 
 const STORAGE_KEY = "windowState";
 const SAVE_DEBOUNCE_MS = 500;
+const MIN_SAFE_WIDTH = 700;
+const MIN_SAFE_HEIGHT = 450;
+const MAX_SAFE_DIMENSION = 10_000;
 
 const invokePromise: Promise<
   ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null
@@ -71,6 +74,56 @@ async function loadState(): Promise<WindowState | null> {
   }
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isSizeReasonable(state: WindowState): boolean {
+  return state.width >= MIN_SAFE_WIDTH
+    && state.height >= MIN_SAFE_HEIGHT
+    && state.width <= MAX_SAFE_DIMENSION
+    && state.height <= MAX_SAFE_DIMENSION;
+}
+
+function rectsIntersect(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean {
+  return a.x < b.x + b.width
+    && a.x + a.width > b.x
+    && a.y < b.y + b.height
+    && a.y + a.height > b.y;
+}
+
+function stateIntersectsAnyMonitor(
+  state: WindowState,
+  monitors: ReadonlyArray<{
+    position: { x: number; y: number };
+    size: { width: number; height: number };
+  }>,
+): boolean {
+  const stateRect = {
+    x: state.x,
+    y: state.y,
+    width: state.width,
+    height: state.height,
+  };
+  for (const monitor of monitors) {
+    const mx = monitor.position?.x;
+    const my = monitor.position?.y;
+    const mw = monitor.size?.width;
+    const mh = monitor.size?.height;
+    if (!isFiniteNumber(mx) || !isFiniteNumber(my) || !isFiniteNumber(mw) || !isFiniteNumber(mh)) {
+      continue;
+    }
+    const monitorRect = { x: mx, y: my, width: mw, height: mh };
+    if (rectsIntersect(stateRect, monitorRect)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Initialize window state persistence.
  * Restores saved position/size on startup and listens for changes.
@@ -94,10 +147,17 @@ export async function initWindowState(): Promise<() => void> {
       if (saved.maximized) {
         await win.maximize();
       } else {
-        const pos = new tauriWindow.PhysicalPosition(saved.x, saved.y);
-        const size = new tauriWindow.PhysicalSize(saved.width, saved.height);
-        await win.setPosition(pos);
-        await win.setSize(size);
+        const monitors = await tauriWindow.availableMonitors();
+        const shouldRestore = isSizeReasonable(saved) && stateIntersectsAnyMonitor(saved, monitors);
+        if (shouldRestore) {
+          const pos = new tauriWindow.PhysicalPosition(saved.x, saved.y);
+          const size = new tauriWindow.PhysicalSize(saved.width, saved.height);
+          await win.setPosition(pos);
+          await win.setSize(size);
+        } else {
+          log.warn("Skipping invalid/off-screen saved window state", saved);
+          await win.center();
+        }
       }
       log.info("Restored window state", { x: saved.x, y: saved.y, width: saved.width, height: saved.height });
     } catch (err) {

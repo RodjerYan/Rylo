@@ -559,6 +559,10 @@ export function createMessageList(options: MessageListOptions): MessageListCompo
       (s) => s.messagesByChannel,
       () => { renderAll(); },
     ));
+    unsubscribers.push(messagesStore.subscribeSelector(
+      (s) => s.pendingMessages,
+      () => { renderAll(); },
+    ));
 
     // Only re-render when member roles change, not on presence/typing updates.
     // Extract a role-only map so shallowEqual ignores status changes.

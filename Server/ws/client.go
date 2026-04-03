@@ -18,27 +18,28 @@ const SessionCheckInterval = 10
 // Client represents a single authenticated WebSocket connection.
 // The underlying transport (conn) is set by ServeWS; in tests it remains nil.
 type Client struct {
-	hub        *Hub
-	conn       wsConn   // interface — nil in unit tests
-	ctx        context.Context // derived from WS upgrade request; cancelled on disconnect
-	userID     int64
-	user       *db.User
-	channelID  int64  // currently viewed channel for channel-scoped broadcasts
-	voiceChID  int64  // voice channel the user is in (0 = not in voice); guarded by voiceMu
-	roleName   string // cached role name for chat_message broadcasts
-	tokenHash  string // SHA-256 hex of the session token; used for periodic revalidation
-	connectedAt  time.Time // when the WS connection was established
-	remoteAddr   string    // client IP:port from the HTTP upgrade request
-	msgCount     int // count of messages processed; resets after session check
-	msgsReceived int64 // total messages received over the lifetime of this connection
-	msgsSent     int64 // total messages sent over the lifetime of this connection
-	msgsDropped  int64 // messages dropped due to full send buffer
-	invalidCount int // consecutive invalid messages; reset on valid parse
-	lastActivity time.Time  // last message received from this client; guarded by mu
-	sendClosed   bool       // true after the send channel has been closed
-	send         chan []byte
-	mu           sync.Mutex // guards sendClosed, msgCount, channelID, lastActivity, msgsReceived, msgsSent, msgsDropped
-	voiceMu      sync.Mutex // guards voiceChID
+	hub           *Hub
+	conn          wsConn          // interface — nil in unit tests
+	ctx           context.Context // derived from WS upgrade request; cancelled on disconnect
+	userID        int64
+	user          *db.User
+	channelID     int64     // currently viewed channel for channel-scoped broadcasts
+	voiceChID     int64     // voice channel the user is in (0 = not in voice); guarded by voiceMu
+	roleName      string    // cached role name for chat_message broadcasts
+	connectedHost string    // host:port used by this client to connect to the server
+	tokenHash     string    // SHA-256 hex of the session token; used for periodic revalidation
+	connectedAt   time.Time // when the WS connection was established
+	remoteAddr    string    // client IP:port from the HTTP upgrade request
+	msgCount      int       // count of messages processed; resets after session check
+	msgsReceived  int64     // total messages received over the lifetime of this connection
+	msgsSent      int64     // total messages sent over the lifetime of this connection
+	msgsDropped   int64     // messages dropped due to full send buffer
+	invalidCount  int       // consecutive invalid messages; reset on valid parse
+	lastActivity  time.Time // last message received from this client; guarded by mu
+	sendClosed    bool      // true after the send channel has been closed
+	send          chan []byte
+	mu            sync.Mutex // guards sendClosed, msgCount, channelID, lastActivity, msgsReceived, msgsSent, msgsDropped
+	voiceMu       sync.Mutex // guards voiceChID
 }
 
 // wsConn is the subset of nhooyr.io/websocket.Conn used by writePump/readPump.

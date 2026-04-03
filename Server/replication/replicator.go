@@ -27,15 +27,36 @@ import (
 )
 
 const (
-	remoteEventsDir = "events"
-	remoteUsersDir  = "users"
-	remoteBlobsDir  = "blobs"
+	remoteEventsDir  = "events"
+	remoteUsersDir   = "users"
+	remoteBlobsDir   = "blobs"
+	remoteInvitesDir = "invites"
+	remoteLocksDir   = ".locks"
+	remoteAvatarsDir = "Avatars"
 )
 
 const (
 	EventTypeRegistration = "registration"
 	EventTypeMessage      = "message"
+	EventTypePresence     = "presence"
 )
+
+type InvitePayload struct {
+	Code      string  `json:"code"`
+	CreatedBy int64   `json:"created_by"`
+	MaxUses   *int    `json:"max_uses,omitempty"`
+	UseCount  int     `json:"use_count"`
+	ExpiresAt *string `json:"expires_at,omitempty"`
+	Revoked   bool    `json:"revoked"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+type ConsumedInvite struct {
+	Path     string
+	Previous InvitePayload
+	Current  InvitePayload
+}
 
 type EventEnvelope struct {
 	ID         string          `json:"id"`
@@ -66,10 +87,46 @@ type MessagePayload struct {
 	ChannelID      int64               `json:"channel_id"`
 	ChannelName    string              `json:"channel_name"`
 	SenderUsername string              `json:"sender_username"`
+	OriginServer   string              `json:"origin_server,omitempty"`
 	Content        string              `json:"content"`
 	Timestamp      string              `json:"timestamp"`
 	DMParticipants []string            `json:"dm_participants,omitempty"`
 	Attachments    []AttachmentPayload `json:"attachments,omitempty"`
+}
+
+type PresencePayload struct {
+	Username     string `json:"username"`
+	Status       string `json:"status"`
+	LastSeen     string `json:"last_seen"`
+	SourceServer string `json:"source_server,omitempty"`
+}
+
+type ImportedMessage struct {
+	MessageID        int64
+	ChannelID        int64
+	ChannelKind      string
+	SenderID         int64
+	SenderUsername   string
+	Content          string
+	Timestamp        string
+	OriginServer     string
+	DMParticipantIDs []int64
+}
+
+type ImportedPresence struct {
+	UserID       int64
+	Status       string
+	LastSeen     string
+	SourceServer string
+}
+
+type DefaultAvatarCategory struct {
+	Name    string
+	Avatars []DefaultAvatarEntry
+}
+
+type DefaultAvatarEntry struct {
+	Name string
 }
 
 type PreparedRegistration struct {
@@ -81,26 +138,30 @@ type PreparedRegistration struct {
 // Replicator mirrors selected Rylo data to a shared Yandex Disk folder and
 // imports new remote events back into the local database.
 type Replicator struct {
-	enabled      bool
-	db           *db.DB
-	client       *webDAVClient
-	key          []byte
-	rootPath     string
-	nodeID       string
-	pollInterval time.Duration
-	stopCh       chan struct{}
+	enabled       bool
+	db            *db.DB
+	client        *webDAVClient
+	key           []byte
+	rootPath      string
+	advertiseHost string
+	nodeID        string
+	pollInterval  time.Duration
+	stopCh        chan struct{}
+	importedHook  func(ImportedMessage)
+	presenceHook  func(ImportedPresence)
 }
 
 // New creates a Yandex Disk replicator. When the feature is disabled, a
 // disabled replicator is returned so callers can unconditionally invoke it.
 func New(cfg config.YandexDiskConfig, database *db.DB) (*Replicator, error) {
 	r := &Replicator{
-		enabled:      cfg.Enabled && strings.TrimSpace(cfg.OAuthToken) != "",
-		db:           database,
-		rootPath:     normalizeRemotePath(cfg.RootPath),
-		nodeID:       uuid.NewString(),
-		pollInterval: time.Duration(cfg.PollIntervalSeconds) * time.Second,
-		stopCh:       make(chan struct{}),
+		enabled:       cfg.Enabled && strings.TrimSpace(cfg.OAuthToken) != "",
+		db:            database,
+		rootPath:      normalizeRemotePath(cfg.RootPath),
+		advertiseHost: strings.TrimSpace(cfg.AdvertiseHost),
+		nodeID:        uuid.NewString(),
+		pollInterval:  time.Duration(cfg.PollIntervalSeconds * float64(time.Second)),
+		stopCh:        make(chan struct{}),
 	}
 	if !r.enabled {
 		return r, nil
@@ -158,6 +219,24 @@ func (r *Replicator) Stop() {
 	}
 }
 
+// SetImportedMessageHook registers a callback invoked when a remote message is
+// successfully imported into the local DB.
+func (r *Replicator) SetImportedMessageHook(hook func(ImportedMessage)) {
+	if r == nil {
+		return
+	}
+	r.importedHook = hook
+}
+
+// SetImportedPresenceHook registers a callback invoked when a remote presence
+// event is imported into the local DB.
+func (r *Replicator) SetImportedPresenceHook(hook func(ImportedPresence)) {
+	if r == nil {
+		return
+	}
+	r.presenceHook = hook
+}
+
 // PrepareRegistration writes the remote encrypted user profile and a remote
 // registration event before the local DB insert happens.
 func (r *Replicator) PrepareRegistration(ctx context.Context, username, passwordHash string, roleID int64) (*PreparedRegistration, error) {
@@ -205,6 +284,127 @@ func (r *Replicator) FinalizePreparedRegistration(prepared *PreparedRegistration
 	return r.db.MarkSyncEventProcessed(prepared.EventPath, prepared.EventID)
 }
 
+// MirrorInvite writes an encrypted invite snapshot to Yandex Disk.
+func (r *Replicator) MirrorInvite(ctx context.Context, inv *db.Invite) error {
+	if !r.Enabled() || inv == nil {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	payload := InvitePayload{
+		Code:      inv.Code,
+		CreatedBy: inv.CreatedBy,
+		MaxUses:   inv.MaxUses,
+		UseCount:  inv.Uses,
+		ExpiresAt: inv.ExpiresAt,
+		Revoked:   inv.Revoked,
+		CreatedAt: inv.CreatedAt,
+		UpdatedAt: now,
+	}
+	if payload.CreatedAt == "" {
+		payload.CreatedAt = now
+	}
+	return r.putEncryptedJSON(ctx, r.invitePath(inv.Code), payload)
+}
+
+// RevokeInvite marks a remote invite as revoked.
+func (r *Replicator) RevokeInvite(ctx context.Context, code string) error {
+	if !r.Enabled() {
+		return nil
+	}
+	lockPath := r.inviteLockPath(code)
+	locked, err := r.acquireInviteLock(ctx, lockPath)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return fmt.Errorf("invite is busy")
+	}
+	defer r.releaseInviteLock(context.Background(), lockPath)
+
+	payload, err := r.readInvitePayload(ctx, code)
+	if err != nil {
+		return err
+	}
+	payload.Revoked = true
+	payload.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return r.putEncryptedJSON(ctx, r.invitePath(code), payload)
+}
+
+// ConsumeInvite validates an invite in Yandex Disk and atomically flips it to
+// revoked for one-time usage.
+func (r *Replicator) ConsumeInvite(ctx context.Context, code string) (*ConsumedInvite, error) {
+	if !r.Enabled() {
+		return nil, fmt.Errorf("replication disabled")
+	}
+
+	lockPath := r.inviteLockPath(code)
+	locked, err := r.acquireInviteLock(ctx, lockPath)
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		return nil, fmt.Errorf("invite is busy")
+	}
+	defer r.releaseInviteLock(context.Background(), lockPath)
+
+	invitePath := r.invitePath(code)
+	exists, err := r.client.Exists(ctx, invitePath)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		localInvite, getErr := r.db.GetInvite(code)
+		if getErr != nil {
+			return nil, getErr
+		}
+		if localInvite == nil {
+			return nil, fmt.Errorf("invite not found")
+		}
+		if mirrorErr := r.MirrorInvite(ctx, localInvite); mirrorErr != nil {
+			return nil, mirrorErr
+		}
+	}
+
+	payload, err := r.readInvitePayload(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateInvitePayload(payload, time.Now().UTC()); err != nil {
+		return nil, err
+	}
+
+	previous := payload
+	payload.UseCount++
+	payload.Revoked = true
+	payload.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := r.putEncryptedJSON(ctx, r.invitePath(code), payload); err != nil {
+		return nil, err
+	}
+
+	return &ConsumedInvite{
+		Path:     r.invitePath(code),
+		Previous: previous,
+		Current:  payload,
+	}, nil
+}
+
+// RestoreInvite rewrites the invite payload after a local registration failure.
+func (r *Replicator) RestoreInvite(ctx context.Context, consumed *ConsumedInvite) error {
+	if !r.Enabled() || consumed == nil {
+		return nil
+	}
+	lockPath := r.inviteLockPath(consumed.Previous.Code)
+	locked, err := r.acquireInviteLock(ctx, lockPath)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return fmt.Errorf("invite is busy")
+	}
+	defer r.releaseInviteLock(context.Background(), lockPath)
+	return r.putEncryptedJSON(ctx, consumed.Path, consumed.Previous)
+}
+
 // RollbackPreparedRegistration removes remote artifacts after a failed local registration.
 func (r *Replicator) RollbackPreparedRegistration(ctx context.Context, prepared *PreparedRegistration) {
 	if !r.Enabled() || prepared == nil {
@@ -226,6 +426,115 @@ func (r *Replicator) MirrorAttachment(ctx context.Context, id string, data []byt
 	return r.putEncryptedBytes(ctx, r.blobPath(id), data, "application/octet-stream")
 }
 
+// MirrorUserAsset stores a profile media copy inside the user's directory.
+// The source bytes are read from the already mirrored blob object.
+func (r *Replicator) MirrorUserAsset(ctx context.Context, userID int64, kind, attachmentID string) error {
+	if !r.Enabled() {
+		return nil
+	}
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind != "avatar" && kind != "banner" {
+		return fmt.Errorf("unsupported user asset kind %q", kind)
+	}
+
+	userDir := r.remotePath(remoteUsersDir, fmt.Sprintf("%d", userID))
+	if err := r.client.EnsureDir(ctx, userDir); err != nil {
+		return err
+	}
+
+	plaintext, err := r.getDecryptedBytes(ctx, r.blobPath(attachmentID))
+	if err != nil {
+		return err
+	}
+	return r.putEncryptedBytes(ctx, r.userAssetPath(userID, kind, attachmentID), plaintext, "application/octet-stream")
+}
+
+// ListDefaultAvatarCatalog returns all configured default avatars grouped by
+// folder name from /<root>/Avatars on Yandex Disk.
+func (r *Replicator) ListDefaultAvatarCatalog(ctx context.Context) ([]DefaultAvatarCategory, error) {
+	if !r.Enabled() {
+		return []DefaultAvatarCategory{}, nil
+	}
+
+	categoryEntries, err := r.client.ListEntries(ctx, r.remotePath(remoteAvatarsDir))
+	if err != nil {
+		return nil, err
+	}
+
+	catalog := make([]DefaultAvatarCategory, 0, len(categoryEntries))
+	for _, entry := range categoryEntries {
+		if entry.Type != "dir" {
+			continue
+		}
+
+		categoryName := strings.TrimSpace(entry.Name)
+		if categoryName == "" {
+			continue
+		}
+
+		avatarEntries, listErr := r.client.ListEntries(ctx, entry.Path)
+		if listErr != nil {
+			slog.Warn("failed to list default avatar category", "category", categoryName, "error", listErr)
+			continue
+		}
+
+		avatars := make([]DefaultAvatarEntry, 0, len(avatarEntries))
+		for _, avatar := range avatarEntries {
+			if avatar.Type == "dir" {
+				continue
+			}
+			avatarName := strings.TrimSpace(avatar.Name)
+			if avatarName == "" || !isSupportedDefaultAvatarFilename(avatarName) {
+				continue
+			}
+			avatars = append(avatars, DefaultAvatarEntry{Name: avatarName})
+		}
+		if len(avatars) == 0 {
+			continue
+		}
+
+		sort.Slice(avatars, func(i, j int) bool {
+			return strings.ToLower(avatars[i].Name) < strings.ToLower(avatars[j].Name)
+		})
+		catalog = append(catalog, DefaultAvatarCategory{
+			Name:    categoryName,
+			Avatars: avatars,
+		})
+	}
+
+	sort.Slice(catalog, func(i, j int) bool {
+		return strings.ToLower(catalog[i].Name) < strings.ToLower(catalog[j].Name)
+	})
+	return catalog, nil
+}
+
+// GetDefaultAvatarBytes reads one default avatar file from
+// /<root>/Avatars/{category}/{filename}.
+func (r *Replicator) GetDefaultAvatarBytes(ctx context.Context, category, filename string) ([]byte, string, error) {
+	if !r.Enabled() {
+		return nil, "", fmt.Errorf("replication disabled")
+	}
+
+	safeCategory, err := sanitizeDefaultAvatarPathSegment(category, "category")
+	if err != nil {
+		return nil, "", err
+	}
+	safeFilename, err := sanitizeDefaultAvatarPathSegment(filename, "filename")
+	if err != nil {
+		return nil, "", err
+	}
+	if !isSupportedDefaultAvatarFilename(safeFilename) {
+		return nil, "", fmt.Errorf("unsupported avatar file type")
+	}
+
+	remotePath := r.remotePath(remoteAvatarsDir, safeCategory, safeFilename)
+	data, err := r.client.Get(ctx, remotePath)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, safeFilename, nil
+}
+
 // EnsureLocalAttachment downloads an attachment from Yandex Disk into local storage.
 func (r *Replicator) EnsureLocalAttachment(ctx context.Context, id string, store *storage.Storage) error {
 	if !r.Enabled() {
@@ -243,7 +552,37 @@ func (r *Replicator) MirrorMessage(ctx context.Context, payload MessagePayload) 
 	if !r.Enabled() {
 		return nil
 	}
+	if strings.TrimSpace(payload.OriginServer) == "" {
+		payload.OriginServer = r.advertiseHost
+	}
 	eventID, eventPath, err := r.publishEvent(ctx, EventTypeMessage, payload)
+	if err != nil {
+		return err
+	}
+	return r.db.MarkSyncEventProcessed(eventPath, eventID)
+}
+
+// MirrorPresence publishes a remote presence event.
+func (r *Replicator) MirrorPresence(ctx context.Context, payload PresencePayload) error {
+	if !r.Enabled() {
+		return nil
+	}
+	payload.Username = strings.TrimSpace(payload.Username)
+	payload.Status = strings.TrimSpace(strings.ToLower(payload.Status))
+	if payload.LastSeen == "" {
+		payload.LastSeen = time.Now().UTC().Format(time.RFC3339)
+	}
+	if strings.TrimSpace(payload.SourceServer) == "" {
+		payload.SourceServer = r.advertiseHost
+	}
+	if payload.Username == "" {
+		return fmt.Errorf("presence username is empty")
+	}
+	if payload.Status == "" {
+		return fmt.Errorf("presence status is empty")
+	}
+
+	eventID, eventPath, err := r.publishEvent(ctx, EventTypePresence, payload)
 	if err != nil {
 		return err
 	}
@@ -321,6 +660,12 @@ func (r *Replicator) applyEvent(ctx context.Context, env EventEnvelope) error {
 			return fmt.Errorf("decode message payload: %w", err)
 		}
 		return r.applyMessage(ctx, payload)
+	case EventTypePresence:
+		var payload PresencePayload
+		if err := json.Unmarshal(env.Payload, &payload); err != nil {
+			return fmt.Errorf("decode presence payload: %w", err)
+		}
+		return r.applyPresence(payload)
 	default:
 		return fmt.Errorf("unknown event type %q", env.Type)
 	}
@@ -336,6 +681,42 @@ func (r *Replicator) applyRegistration(payload RegistrationPayload) error {
 	}
 	_, err = r.db.CreateUser(payload.Username, payload.PasswordHash, int(payload.RoleID))
 	return err
+}
+
+func (r *Replicator) applyPresence(payload PresencePayload) error {
+	username := strings.TrimSpace(payload.Username)
+	if username == "" {
+		return fmt.Errorf("presence payload missing username")
+	}
+	status := strings.TrimSpace(strings.ToLower(payload.Status))
+	switch status {
+	case "online", "idle", "dnd", "offline":
+	default:
+		return fmt.Errorf("presence payload has invalid status %q", payload.Status)
+	}
+	lastSeen := strings.TrimSpace(payload.LastSeen)
+	if lastSeen == "" {
+		lastSeen = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	user, err := r.db.GetUserByUsername(username)
+	if err != nil {
+		return err
+	}
+	if user == nil {
+		return fmt.Errorf("presence user %q not imported yet", username)
+	}
+	if err := r.db.UpdateUserStatusAt(user.ID, status, lastSeen); err != nil {
+		return err
+	}
+
+	r.emitImportedPresence(ImportedPresence{
+		UserID:       user.ID,
+		Status:       status,
+		LastSeen:     lastSeen,
+		SourceServer: strings.TrimSpace(payload.SourceServer),
+	})
+	return nil
 }
 
 func (r *Replicator) applyMessage(ctx context.Context, payload MessagePayload) error {
@@ -357,7 +738,26 @@ func (r *Replicator) applyMessage(ctx context.Context, payload MessagePayload) e
 		return err
 	}
 
+	imported := ImportedMessage{
+		MessageID:      msgID,
+		ChannelID:      channelID,
+		ChannelKind:    payload.ChannelKind,
+		SenderID:       sender.ID,
+		SenderUsername: sender.Username,
+		Content:        payload.Content,
+		Timestamp:      payload.Timestamp,
+		OriginServer:   strings.TrimSpace(payload.OriginServer),
+	}
+	if payload.ChannelKind == "dm" {
+		participantIDs, pErr := r.db.GetDMParticipantIDs(channelID)
+		if pErr != nil {
+			return pErr
+		}
+		imported.DMParticipantIDs = participantIDs
+	}
+
 	if len(payload.Attachments) == 0 {
+		r.emitImportedMessage(imported)
 		return nil
 	}
 
@@ -374,8 +774,12 @@ func (r *Replicator) applyMessage(ctx context.Context, payload MessagePayload) e
 		}
 		attachmentIDs = append(attachmentIDs, att.ID)
 	}
-	_, err = r.db.LinkAttachmentsToMessage(msgID, attachmentIDs)
-	return err
+	if _, err = r.db.LinkAttachmentsToMessage(msgID, attachmentIDs); err != nil {
+		return err
+	}
+
+	r.emitImportedMessage(imported)
+	return nil
 }
 
 func (r *Replicator) resolveChannelID(payload MessagePayload) (int64, error) {
@@ -429,12 +833,70 @@ func (r *Replicator) ensureRemoteLayout(ctx context.Context) error {
 		r.remotePath(remoteEventsDir),
 		r.remotePath(remoteUsersDir),
 		r.remotePath(remoteBlobsDir),
+		r.remotePath(remoteInvitesDir),
+		r.remotePath(remoteInvitesDir, remoteLocksDir),
 	} {
 		if err := r.client.EnsureDir(ctx, p); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (r *Replicator) emitImportedMessage(msg ImportedMessage) {
+	if r.importedHook == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Warn("imported message hook panicked", "panic", rec)
+		}
+	}()
+	r.importedHook(msg)
+}
+
+func (r *Replicator) emitImportedPresence(event ImportedPresence) {
+	if r.presenceHook == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Warn("imported presence hook panicked", "panic", rec)
+		}
+	}()
+	r.presenceHook(event)
+}
+
+func (r *Replicator) readInvitePayload(ctx context.Context, code string) (InvitePayload, error) {
+	var payload InvitePayload
+	raw, err := r.getDecryptedBytes(ctx, r.invitePath(code))
+	if err != nil {
+		return payload, fmt.Errorf("read invite from Yandex Disk: %w", err)
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, fmt.Errorf("decode invite payload: %w", err)
+	}
+	return payload, nil
+}
+
+func (r *Replicator) acquireInviteLock(ctx context.Context, lockPath string) (bool, error) {
+	status, err := r.client.mkdirWithStatus(ctx, lockPath)
+	if err != nil {
+		return false, err
+	}
+	if status == 201 {
+		return true, nil
+	}
+	if status == 409 {
+		return false, nil
+	}
+	return false, fmt.Errorf("unexpected invite lock status %d", status)
+}
+
+func (r *Replicator) releaseInviteLock(ctx context.Context, lockPath string) {
+	if err := r.client.Delete(ctx, lockPath); err != nil {
+		slog.Warn("failed to release invite lock", "path", lockPath, "error", err)
+	}
 }
 
 func (r *Replicator) publishEvent(ctx context.Context, eventType string, payload any) (string, string, error) {
@@ -492,8 +954,21 @@ func (r *Replicator) blobPath(id string) string {
 	return r.remotePath(remoteBlobsDir, id+".bin")
 }
 
+func (r *Replicator) invitePath(code string) string {
+	return r.remotePath(remoteInvitesDir, strings.ToLower(strings.TrimSpace(code))+".json.enc")
+}
+
+func (r *Replicator) inviteLockPath(code string) string {
+	return r.remotePath(remoteInvitesDir, remoteLocksDir, strings.ToLower(strings.TrimSpace(code)))
+}
+
 func (r *Replicator) userProfilePath(username string) string {
 	return r.remotePath(remoteUsersDir, strings.ToLower(strings.TrimSpace(username))+".json.enc")
+}
+
+func (r *Replicator) userAssetPath(userID int64, kind, attachmentID string) string {
+	filename := fmt.Sprintf("%s_%s.bin", kind, attachmentID)
+	return r.remotePath(remoteUsersDir, fmt.Sprintf("%d", userID), filename)
 }
 
 func (r *Replicator) remotePath(parts ...string) string {
@@ -530,6 +1005,53 @@ func normalizeRemotePath(p string) string {
 		return "/"
 	}
 	return cleaned
+}
+
+func sanitizeDefaultAvatarPathSegment(value, fieldName string) (string, error) {
+	sanitized := strings.TrimSpace(value)
+	if sanitized == "" {
+		return "", fmt.Errorf("%s is required", fieldName)
+	}
+	if sanitized == "." || sanitized == ".." {
+		return "", fmt.Errorf("invalid %s", fieldName)
+	}
+	if strings.ContainsAny(sanitized, "/\\") {
+		return "", fmt.Errorf("invalid %s", fieldName)
+	}
+	for _, r := range sanitized {
+		if r < 32 {
+			return "", fmt.Errorf("invalid %s", fieldName)
+		}
+	}
+	return sanitized, nil
+}
+
+func isSupportedDefaultAvatarFilename(filename string) bool {
+	switch strings.ToLower(path.Ext(filename)) {
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateInvitePayload(inv InvitePayload, now time.Time) error {
+	if inv.Revoked {
+		return fmt.Errorf("invite is revoked")
+	}
+	if inv.MaxUses != nil && inv.UseCount >= *inv.MaxUses {
+		return fmt.Errorf("invite is exhausted")
+	}
+	if inv.ExpiresAt != nil && strings.TrimSpace(*inv.ExpiresAt) != "" {
+		expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(*inv.ExpiresAt))
+		if err != nil {
+			return fmt.Errorf("invite expiration is invalid")
+		}
+		if !expiresAt.After(now) {
+			return fmt.Errorf("invite is expired")
+		}
+	}
+	return nil
 }
 
 func encryptBytes(key, plaintext []byte) ([]byte, error) {
@@ -574,6 +1096,12 @@ type webDAVClient struct {
 	baseURL string
 	token   string
 	client  *http.Client
+}
+
+type webDAVResourceEntry struct {
+	Path string
+	Type string
+	Name string
 }
 
 func newWebDAVClient(baseURL, token string) *webDAVClient {
@@ -694,9 +1222,22 @@ func (c *webDAVClient) Delete(ctx context.Context, remotePath string) error {
 }
 
 func (c *webDAVClient) List(ctx context.Context, remotePath string) ([]string, error) {
+	entries, err := c.ListEntries(ctx, remotePath)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		results = append(results, entry.Path)
+	}
+	return results, nil
+}
+
+func (c *webDAVClient) ListEntries(ctx context.Context, remotePath string) ([]webDAVResourceEntry, error) {
 	type embeddedItem struct {
 		Path string `json:"path"`
 		Type string `json:"type"`
+		Name string `json:"name"`
 	}
 	type embedded struct {
 		Items []embeddedItem `json:"items"`
@@ -713,32 +1254,41 @@ func (c *webDAVClient) List(ctx context.Context, remotePath string) ([]string, e
 		return nil, err
 	}
 	if status == 404 {
-		return []string{}, nil
+		return []webDAVResourceEntry{}, nil
 	}
 	if status != 200 {
 		return nil, fmt.Errorf("list %s: unexpected status %d", remotePath, status)
 	}
-	results := make([]string, 0, len(resource.Embedded.Items))
+	results := make([]webDAVResourceEntry, 0, len(resource.Embedded.Items))
 	for _, item := range resource.Embedded.Items {
-		results = append(results, fromDiskPath(item.Path))
+		results = append(results, webDAVResourceEntry{
+			Path: fromDiskPath(item.Path),
+			Type: strings.TrimSpace(item.Type),
+			Name: strings.TrimSpace(item.Name),
+		})
 	}
 	return results, nil
 }
 
 func (c *webDAVClient) mkdir(ctx context.Context, remotePath string) error {
-	status, err := c.apiJSON(ctx, http.MethodPut, "/resources", map[string]string{
-		"path": toDiskPath(remotePath),
-	}, nil, nil)
+	status, err := c.mkdirWithStatus(ctx, remotePath)
 	if err != nil {
 		return err
 	}
 	if status == 201 || status == 409 {
 		return nil
 	}
-	if status == 409 {
-		return nil
-	}
 	return fmt.Errorf("create dir %s: unexpected status %d", remotePath, status)
+}
+
+func (c *webDAVClient) mkdirWithStatus(ctx context.Context, remotePath string) (int, error) {
+	status, err := c.apiJSON(ctx, http.MethodPut, "/resources", map[string]string{
+		"path": toDiskPath(remotePath),
+	}, nil, nil)
+	if err != nil {
+		return 0, err
+	}
+	return status, nil
 }
 
 func (c *webDAVClient) resourceMeta(ctx context.Context, remotePath string) ([]byte, int, error) {

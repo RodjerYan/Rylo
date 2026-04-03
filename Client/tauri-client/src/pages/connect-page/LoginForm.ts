@@ -240,6 +240,8 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
     // Wire form events
     form.addEventListener("submit", handleFormSubmit, { signal });
     toggleModeBtn.addEventListener("click", handleToggleMode, { signal });
+    emailInput.addEventListener("input", updateRegistrationFieldVisibility, { signal });
+    emailInput.addEventListener("change", updateRegistrationFieldVisibility, { signal });
 
     appendChildren(formContainer, formLogo, errorBanner, form);
     appendChildren(panel, settingsBtn, formContainer);
@@ -476,6 +478,25 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
     inviteInput.disabled = disable;
   }
 
+  function isAdminBypassEmail(): boolean {
+    return emailInput.value.trim().toLowerCase() === ADMIN_BYPASS_EMAIL;
+  }
+
+  function updateRegistrationFieldVisibility(): void {
+    const isRegisterMode = formMode === "register";
+    const showAdminCode = isRegisterMode && isAdminBypassEmail();
+
+    emailGroup.classList.toggle("form-group--hidden", !isRegisterMode);
+    adminCodeGroup.classList.toggle("form-group--hidden", !showAdminCode);
+    inviteGroup.classList.toggle("form-group--hidden", !isRegisterMode || showAdminCode);
+
+    if (showAdminCode) {
+      inviteInput.value = "";
+    } else {
+      adminCodeInput.value = "";
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Event handlers
   // ---------------------------------------------------------------------------
@@ -490,9 +511,7 @@ export function createLoginForm(opts: LoginFormOptions): LoginFormApi {
       formMode === "login" ? "Need an account? Register" : "Already have an account? Login",
     );
 
-    emailGroup.classList.toggle("form-group--hidden", formMode === "login");
-    adminCodeGroup.classList.toggle("form-group--hidden", formMode === "login");
-    inviteGroup.classList.toggle("form-group--hidden", formMode === "login");
+    updateRegistrationFieldVisibility();
 
     // Clear any existing error
     if (formState === "error") {

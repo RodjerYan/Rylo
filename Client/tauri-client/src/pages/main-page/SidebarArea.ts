@@ -12,7 +12,6 @@ import type { ApiClient } from "@lib/api";
 import type { RateLimiterSet } from "@lib/rate-limiter";
 import type { ToastContainer } from "@components/Toast";
 import { createChannelSidebar } from "@components/ChannelSidebar";
-import { createMemberList } from "@components/MemberList";
 import { createDmSidebar, type DmConversation } from "@components/DmSidebar";
 import { createCreateChannelModal } from "@components/CreateChannelModal";
 import { createEditChannelModal } from "@components/EditChannelModal";
@@ -21,12 +20,13 @@ import { createUserBar } from "@components/UserBar";
 import { createVoiceWidget } from "@components/VoiceWidget";
 import { createQuickSwitchOverlay } from "@components/QuickSwitchOverlay";
 import type { QuickSwitchProfile } from "@components/QuickSwitchOverlay";
+import { openUserProfile } from "@components/UserProfileOverlay";
 import { createVoiceWidgetCallbacks, createSidebarVoiceCallbacks } from "./VoiceCallbacks";
 import { createInviteManagerController } from "./OverlayManagers";
 import { uiStore, setSidebarMode, setActiveDmUser, loadCollapsedCategories } from "@stores/ui.store";
 import { authStore, clearAuth } from "@stores/auth.store";
 import { membersStore, getOnlineMembers } from "@stores/members.store";
-import { channelsStore, setActiveChannel, getRoleIdByName } from "@stores/channels.store";
+import { channelsStore, setActiveChannel } from "@stores/channels.store";
 import type { Channel } from "@stores/channels.store";
 import { dmStore, clearDmUnread, addDmChannel, removeDmChannel } from "@stores/dm.store";
 import type { DmChannel } from "@stores/dm.store";
@@ -382,6 +382,7 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
           username: result.recipient.username,
           avatar: result.recipient.avatar,
           status: result.recipient.status ?? member?.status ?? "offline",
+          lastSeen: result.recipient.last_seen ?? member?.lastSeen ?? null,
         },
         lastMessageId: null,
         lastMessage: "",
@@ -412,6 +413,7 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
       username: dm.recipient.username,
       avatar: dm.recipient.avatar || null,
       status: (dm.recipient.status as DmConversation["status"]) ?? "offline",
+      lastSeen: dm.recipient.lastSeen ?? null,
       lastMessage: dm.lastMessage || "No messages yet",
       timestamp: dm.lastMessageAt,
       unread: dm.unreadCount > 0,
@@ -536,28 +538,57 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
         clearChildren(dmList);
         const dmChannels = dmStore.getState().channels;
         const displayChannels = dmChannels.slice(0, 3);
+        const activeDmUserId = uiStore.getState().activeDmUserId;
         for (const dm of displayChannels) {
           const dmItem = createElement("div", {
-            class: "channel-item",
+            class: "sidebar-dm-entry",
             "data-testid": "dm-entry",
           });
-          const statusColor = dm.recipient.status === "online" ? "var(--green)"
-            : dm.recipient.status === "idle" ? "var(--yellow)"
-            : dm.recipient.status === "dnd" ? "var(--red)"
-            : "var(--text-micro)";
+          if (activeDmUserId === dm.recipient.id) {
+            dmItem.classList.add("active");
+          }
+
+          const statusText = dm.recipient.status === "online"
+            ? "В сети"
+            : dm.recipient.status === "idle"
+              ? "Нет на месте"
+              : dm.recipient.status === "dnd"
+                ? "Не беспокоить"
+                : "Не в сети";
+
+          const avatar = createElement("div", { class: "sidebar-dm-entry-avatar" });
+          setText(avatar, dm.recipient.username.charAt(0).toUpperCase());
+
           const statusDot = createElement("span", {
-            style: `display:inline-block;width:8px;height:8px;border-radius:50%;background:${statusColor};flex-shrink:0;`,
+            class: `sidebar-dm-entry-status ${dm.recipient.status}`,
           });
-          const name = createElement("span", { class: "ch-name" }, dm.recipient.username);
-          const parts: Element[] = [statusDot, name];
+          avatar.appendChild(statusDot);
+
+          const info = createElement("div", { class: "sidebar-dm-entry-info" });
+          const name = createElement("div", { class: "sidebar-dm-entry-name" }, dm.recipient.username);
+          const status = createElement("div", { class: "sidebar-dm-entry-substatus" }, `ID: ${dm.recipient.id} • ${statusText}`);
+          appendChildren(info, name, status);
+          const parts: Element[] = [avatar, info];
+
           if (dm.unreadCount > 0) {
             const badge = createElement("span", {
-              class: "dm-unread-badge",
-              style: "margin-left:auto;background:var(--red);color:white;border-radius:10px;padding:1px 6px;font-size:0.7rem;",
+              class: "sidebar-dm-entry-unread",
             }, String(dm.unreadCount));
             parts.push(badge);
           }
           appendChildren(dmItem, ...parts);
+          const openProfileCard = (event: Event): void => {
+            event.stopPropagation();
+            openUserProfile({
+              id: dm.recipient.id,
+              username: dm.recipient.username,
+              avatar: dm.recipient.avatar,
+              status: dm.recipient.status,
+              lastSeen: dm.recipient.lastSeen ?? undefined,
+            });
+          };
+          avatar.addEventListener("click", openProfileCard);
+          info.addEventListener("click", openProfileCard);
           dmItem.addEventListener("click", () => {
             selectDmConversation(dm);
           });
@@ -622,16 +653,16 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
         (oldSidebarHeader as HTMLElement).style.display = "none";
       }
 
-      // --- Member list (below DM section) ---
+      // --- User search (below DM section) ---
       const memberListContainer = createElement("div", {
         class: "sidebar-members-section",
         "data-testid": "sidebar-members",
       });
 
-      // Member header (styled like category headers)
+      // Header (styled like category headers)
       const memberHeader = createElement("div", { class: "category sidebar-members-header" });
       const memberArrow = createElement("span", { class: "category-arrow" }, "\u25BC");
-      const memberLabelEl = createElement("span", { class: "category-name" }, "MEMBERS");
+      const memberLabelEl = createElement("span", { class: "category-name" }, "ПОИСК ПОЛЬЗОВАТЕЛЕЙ");
       appendChildren(memberHeader, memberArrow, memberLabelEl);
       memberListContainer.appendChild(memberHeader);
 
@@ -639,10 +670,17 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
       const resizeHandle = createElement("div", { class: "sidebar-resize-handle" });
       memberListContainer.appendChild(resizeHandle);
 
+      // Keep independent size prefs for the new user-search block.
+      const userSearchHeightKey = "rylo:user-search-height";
+      const userSearchCollapsedKey = "rylo:user-search-collapsed";
+
       // Restore saved height
-      const savedHeight = localStorage.getItem("rylo:member-list-height");
-      if (savedHeight !== null) {
-        memberListContainer.style.height = `${savedHeight}px`;
+      const savedHeightRaw = localStorage.getItem(userSearchHeightKey);
+      const savedHeight = savedHeightRaw !== null ? Number(savedHeightRaw) : NaN;
+      if (Number.isFinite(savedHeight)) {
+        memberListContainer.style.height = `${Math.max(180, savedHeight)}px`;
+      } else {
+        memberListContainer.style.height = "240px";
       }
 
       // Drag-to-resize logic
@@ -669,13 +707,13 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
       document.addEventListener("mouseup", () => {
         if (!isDragging) return;
         isDragging = false;
-        localStorage.setItem("rylo:member-list-height", String(memberListContainer.offsetHeight));
+        localStorage.setItem(userSearchHeightKey, String(memberListContainer.offsetHeight));
       }, { signal: resizeAbort.signal });
 
       channelModeUnsubs.push(() => { resizeAbort.abort(); });
 
       // Restore collapsed state from localStorage
-      const savedCollapsed = localStorage.getItem("rylo:member-list-collapsed");
+      const savedCollapsed = localStorage.getItem(userSearchCollapsedKey);
       let membersCollapsed = savedCollapsed === "true";
       const memberContent = createElement("div", { class: "sidebar-members-content" });
 
@@ -687,12 +725,9 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
         if (membersCollapsed) {
           memberListContainer.style.height = "auto";
         } else {
-          const h = localStorage.getItem("rylo:member-list-height");
-          if (h !== null) {
-            memberListContainer.style.height = `${h}px`;
-          } else {
-            memberListContainer.style.height = "";
-          }
+          const hRaw = localStorage.getItem(userSearchHeightKey);
+          const h = hRaw !== null ? Number(hRaw) : NaN;
+          memberListContainer.style.height = Number.isFinite(h) ? `${Math.max(180, h)}px` : "240px";
         }
       }
 
@@ -701,46 +736,143 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
 
       memberHeader.addEventListener("click", () => {
         membersCollapsed = !membersCollapsed;
-        localStorage.setItem("rylo:member-list-collapsed", String(membersCollapsed));
+        localStorage.setItem(userSearchCollapsedKey, String(membersCollapsed));
         applyMembersCollapsed();
       });
 
-      const memberList = createMemberList({
-        currentUserRole: authStore.getState().user?.role ?? "member",
-        onKick: async (userId, username) => {
-          try {
-            await api.adminKickMember(userId);
-            getToast()?.show(`Kicked ${username}`, "success");
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : "Failed to kick member";
-            getToast()?.show(msg, "error");
-          }
-        },
-        onBan: async (userId, username) => {
-          try {
-            await api.adminBanMember(userId);
-            getToast()?.show(`Banned ${username}`, "success");
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : "Failed to ban member";
-            getToast()?.show(msg, "error");
-          }
-        },
-        onChangeRole: async (userId, username, newRole) => {
-          const roleId = getRoleIdByName(newRole);
-          if (roleId === undefined) return;
-          try {
-            await api.adminChangeRole(userId, roleId);
-            getToast()?.show(`Changed ${username}'s role to ${newRole}`, "success");
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : "Failed to change role";
-            getToast()?.show(msg, "error");
-          }
-        },
+      const searchWrap = createElement("div", { class: "sidebar-user-search-wrap" });
+      const searchInput = createElement("input", {
+        class: "sidebar-user-search-input",
+        type: "text",
+        placeholder: "Введите ID или никнейм",
+        "data-testid": "sidebar-user-search-input",
+      }) as HTMLInputElement;
+      const searchResults = createElement("div", {
+        class: "sidebar-user-search-results",
+        "data-testid": "sidebar-user-search-results",
       });
-      memberList.mount(memberContent);
+      const searchHint = createElement("div", {
+        class: "sidebar-user-search-hint",
+      }, "Введите запрос, чтобы найти пользователя");
+
+      appendChildren(searchWrap, searchInput, searchResults, searchHint);
+      memberContent.appendChild(searchWrap);
+
+      function renderSearchResults(): void {
+        const query = searchInput.value.trim().toLowerCase();
+        clearChildren(searchResults);
+
+        if (query.length === 0) {
+          searchResults.style.display = "none";
+          searchHint.style.display = "";
+          return;
+        }
+
+        const isNumericQuery = /^\d+$/.test(query);
+        const currentUserId = authStore.getState().user?.id ?? 0;
+        const members = membersStore.getState().members;
+
+        const matches: Array<{
+          id: number;
+          username: string;
+          status: string;
+          isCurrentUser: boolean;
+        }> = [];
+
+        for (const member of members.values()) {
+          const usernameMatch = member.username.toLowerCase().includes(query);
+          const idValue = String(member.id);
+          const idMatch = isNumericQuery
+            ? idValue.includes(query)
+            : idValue === query;
+
+          if (usernameMatch || idMatch) {
+            matches.push({
+              id: member.id,
+              username: member.username,
+              status: member.status,
+              isCurrentUser: member.id === currentUserId,
+            });
+          }
+        }
+
+        matches.sort((a, b) => a.username.localeCompare(b.username, "ru-RU"));
+        const limited = matches.slice(0, 25);
+
+        if (limited.length === 0) {
+          searchResults.style.display = "block";
+          searchHint.style.display = "none";
+          const empty = createElement("div", { class: "sidebar-user-search-empty" }, "Пользователь не найден");
+          searchResults.appendChild(empty);
+          return;
+        }
+
+        for (const item of limited) {
+          const row = createElement("button", {
+            class: "sidebar-user-search-item",
+            type: "button",
+            "data-user-id": String(item.id),
+          });
+          if (item.isCurrentUser) {
+            row.classList.add("sidebar-user-search-item-self");
+          }
+          const avatar = createElement("div", { class: "sidebar-user-search-avatar" });
+          setText(avatar, item.username.charAt(0).toUpperCase());
+          const main = createElement("div", { class: "sidebar-user-search-main" });
+          const name = createElement("div", { class: "sidebar-user-search-name" }, item.username);
+          const id = createElement("div", { class: "sidebar-user-search-id" }, `ID: ${item.id}`);
+          appendChildren(main, name, id);
+          const state = createElement("div", { class: "sidebar-user-search-state" });
+          const statusDot = createElement("span", {
+            class: `sidebar-user-search-status ${item.status}`,
+          });
+          const statusText = createElement("span", { class: "sidebar-user-search-status-text" },
+            item.status === "online" ? "в сети" : "не в сети");
+          appendChildren(state, statusDot, statusText);
+          appendChildren(row, avatar, main, state);
+          row.addEventListener("click", () => {
+            if (item.isCurrentUser) {
+              getToast()?.show("Это ваш аккаунт", "error");
+              return;
+            }
+            void handleCreateDm(item.id);
+            searchInput.value = "";
+            renderSearchResults();
+          });
+          searchResults.appendChild(row);
+        }
+
+        searchResults.style.display = "block";
+        searchHint.style.display = "none";
+      }
+
+      const searchAbort = new AbortController();
+      searchInput.addEventListener("input", renderSearchResults, { signal: searchAbort.signal });
+      searchInput.addEventListener("keydown", (event: KeyboardEvent) => {
+        if (event.key !== "Enter") {
+          return;
+        }
+        const first = searchResults.querySelector(".sidebar-user-search-item") as HTMLButtonElement | null;
+        if (first === null) {
+          return;
+        }
+        event.preventDefault();
+        first.click();
+      }, { signal: searchAbort.signal });
+
+      const unsubMemberSearch = membersStore.subscribeSelector(
+        (s) => s.members,
+        () => {
+          renderSearchResults();
+        },
+      );
+
+      channelModeUnsubs.push(() => { searchAbort.abort(); });
+      channelModeUnsubs.push(unsubMemberSearch);
+      renderSearchResults();
+
       memberListContainer.appendChild(memberContent);
       contentSlot.appendChild(memberListContainer);
-      channelModeExtras.push(memberList);
     } else {
       const dmSidebar = buildDmSidebar();
       dmSidebar.mount(innerSlot);
@@ -845,6 +977,7 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
           closeQuickSwitch();
           // Store target for ConnectPage to auto-select after navigation
           sessionStorage.setItem("rylo:quick-switch-target", host);
+          sessionStorage.setItem("rylo:logout-reason", "switch");
           // Trigger normal logout flow (clears auth -> ws disconnect -> navigate to connect)
           clearAuth();
         },

@@ -36,12 +36,13 @@ type GitHubConfig struct {
 
 // YandexDiskConfig holds remote replication settings for the shared Yandex Disk.
 type YandexDiskConfig struct {
-	Enabled             bool   `koanf:"enabled"`
-	BaseURL             string `koanf:"base_url"`
-	RootPath            string `koanf:"root_path"`
-	OAuthToken          string `koanf:"oauth_token"`
-	EncryptionKey       string `koanf:"encryption_key"`
-	PollIntervalSeconds int    `koanf:"poll_interval_seconds"`
+	Enabled             bool    `koanf:"enabled"`
+	BaseURL             string  `koanf:"base_url"`
+	RootPath            string  `koanf:"root_path"`
+	AdvertiseHost       string  `koanf:"advertise_host"`
+	OAuthToken          string  `koanf:"oauth_token"`
+	EncryptionKey       string  `koanf:"encryption_key"`
+	PollIntervalSeconds float64 `koanf:"poll_interval_seconds"`
 }
 
 // RegistrationConfig holds invitation and privileged bootstrap settings.
@@ -130,8 +131,9 @@ func defaults() Config {
 			Enabled:             true,
 			BaseURL:             "https://webdav.yandex.ru",
 			RootPath:            "/RyloData",
+			AdvertiseHost:       "localhost:8443",
 			OAuthToken:          "y0__xCDkZwgGJjuPyDTpI37FjCA3bCRCM3Vs_NqcknUFmCgLxsJZeFlDh1M",
-			PollIntervalSeconds: 10,
+			PollIntervalSeconds: 0.01,
 		},
 		Registration: RegistrationConfig{},
 	}
@@ -181,9 +183,10 @@ yandex_disk:
   enabled: true
   base_url: "https://webdav.yandex.ru"
   root_path: "/RyloData"
+  advertise_host: "localhost:8443"  # host:port, который получатели используют для автоподключения
   oauth_token: "y0__xCDkZwgGJjuPyDTpI37FjCA3bCRCM3Vs_NqcknUFmCgLxsJZeFlDh1M"
   encryption_key: ""  # optional 32-byte key (base64/hex/plain); defaults to token-derived key
-  poll_interval_seconds: 10
+  poll_interval_seconds: 0.01
 
 registration:
   admin_bypass_email: ""
@@ -315,8 +318,11 @@ func applyYandexDiskDefaults(v *YandexDiskConfig) {
 	if v.RootPath == "" {
 		v.RootPath = "/RyloData"
 	}
+	if v.AdvertiseHost == "" {
+		v.AdvertiseHost = "localhost:8443"
+	}
 	if v.PollIntervalSeconds <= 0 {
-		v.PollIntervalSeconds = 10
+		v.PollIntervalSeconds = 0.01
 	}
 }
 

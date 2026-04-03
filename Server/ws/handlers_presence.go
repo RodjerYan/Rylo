@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/rylo/server/permissions"
+	"github.com/rylo/server/replication"
 )
 
 // registerPresenceHandlers registers presence, typing, and channel focus handlers.
@@ -85,13 +87,31 @@ func (h *Hub) handlePresence(ctx context.Context, c *Client, payload json.RawMes
 		return
 	}
 
-	if err := h.db.UpdateUserStatus(c.userID, p.Status); err != nil {
+	lastSeen := time.Now().UTC().Format(time.RFC3339)
+	if err := h.db.UpdateUserStatusAt(c.userID, p.Status, lastSeen); err != nil {
 		slog.Error("ws handlePresence UpdateUserStatus", "err", err, "user_id", c.userID)
 		c.sendMsg(buildErrorMsg(ErrCodeInternal, "failed to update status"))
 		return
 	}
 
-	h.BroadcastToAll(buildPresenceMsg(c.userID, p.Status))
+	lastSeenPtr := &lastSeen
+	h.BroadcastToAll(buildPresenceMsg(c.userID, p.Status, lastSeenPtr))
+
+	if h.replicator != nil && h.replicator.Enabled() {
+		username := ""
+		sourceServer := c.connectedHost
+		if c.user != nil {
+			username = c.user.Username
+		}
+		if err := h.replicator.MirrorPresence(ctx, replication.PresencePayload{
+			Username:     username,
+			Status:       p.Status,
+			LastSeen:     lastSeen,
+			SourceServer: sourceServer,
+		}); err != nil {
+			slog.Warn("ws handlePresence MirrorPresence", "err", err, "user_id", c.userID)
+		}
+	}
 }
 
 // handleChannelFocus sets which channel the client is currently viewing,

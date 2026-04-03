@@ -58,11 +58,19 @@ type totpConfirmationRequest struct {
 	Code     string `json:"code"`
 }
 
+type updateProfileRequest struct {
+	Username *string `json:"username"`
+	Avatar   *string `json:"avatar"`
+	Banner   *string `json:"banner"`
+}
+
 // userResponse is the user shape included in auth responses.
 type userResponse struct {
 	ID          int64  `json:"id"`
+	ProfileID   int64  `json:"profile_id"`
 	Username    string `json:"username"`
 	Avatar      string `json:"avatar,omitempty"`
+	Banner      string `json:"banner,omitempty"`
 	Status      string `json:"status"`
 	RoleID      int64  `json:"role_id"`
 	TOTPEnabled bool   `json:"totp_enabled"`
@@ -118,6 +126,10 @@ func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, t
 		Post("/api/v1/users/me/totp/enable", handleEnableTOTP(pendingTOTPStore))
 
 	r.With(AuthMiddleware(database),
+		RateLimitMiddleware(limiter, 10, time.Minute, trustedProxies)).
+		Patch("/api/v1/users/me", handleUpdateProfile(database, replicator))
+
+	r.With(AuthMiddleware(database),
 		RateLimitMiddleware(limiter, 5, time.Minute, trustedProxies)).
 		Post("/api/v1/users/me/totp/confirm", handleConfirmTOTP(database, pendingTOTPStore))
 
@@ -129,38 +141,6 @@ func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, t
 // handleRegister processes POST /api/v1/auth/register.
 func handleRegister(database *db.DB, replicator *replication.Replicator, registrationCfg config.RegistrationConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		registrationOpen, err := isRegistrationOpen(database)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, errorResponse{
-				Error:   "SERVER_ERROR",
-				Message: "failed to load registration policy",
-			})
-			return
-		}
-		if !registrationOpen {
-			writeJSON(w, http.StatusForbidden, errorResponse{
-				Error:   "FORBIDDEN",
-				Message: "registration is currently closed",
-			})
-			return
-		}
-
-		require2FA, err := isRequire2FAEnabled(database)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, errorResponse{
-				Error:   "SERVER_ERROR",
-				Message: "failed to load registration policy",
-			})
-			return
-		}
-		if require2FA {
-			writeJSON(w, http.StatusForbidden, errorResponse{
-				Error:   "FORBIDDEN",
-				Message: "registration is unavailable while two-factor authentication is required",
-			})
-			return
-		}
-
 		var req registerRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, errorResponse{
@@ -190,6 +170,23 @@ func handleRegister(database *db.DB, replicator *replication.Replicator, registr
 				Message: "admin_code is required for the admin email",
 			})
 			return
+		}
+		if !adminBypass {
+			require2FA, err := isRequire2FAEnabled(database)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, errorResponse{
+					Error:   "SERVER_ERROR",
+					Message: "failed to load registration policy",
+				})
+				return
+			}
+			if require2FA {
+				writeJSON(w, http.StatusForbidden, errorResponse{
+					Error:   "FORBIDDEN",
+					Message: "registration is unavailable while two-factor authentication is required",
+				})
+				return
+			}
 		}
 		if !adminBypass && req.InviteCode == "" {
 			writeJSON(w, http.StatusBadRequest, errorResponse{
@@ -241,9 +238,20 @@ func handleRegister(database *db.DB, replicator *replication.Replicator, registr
 				return
 			}
 		}
+		var consumedInvite *replication.ConsumedInvite
+		if !adminBypass && replicator != nil && replicator.Enabled() {
+			consumedInvite, err = replicator.ConsumeInvite(r.Context(), req.InviteCode)
+			if err != nil {
+				replicator.RollbackPreparedRegistration(r.Context(), prepared)
+				writeJSON(w, http.StatusBadRequest, genericAuthError)
+				return
+			}
+		}
 
 		var uid int64
 		if adminBypass {
+			uid, err = database.CreateUser(req.Username, hash, int(roleID))
+		} else if replicator != nil && replicator.Enabled() {
 			uid, err = database.CreateUser(req.Username, hash, int(roleID))
 		} else {
 			// Atomically consume the invite and create the user so failed
@@ -253,6 +261,11 @@ func handleRegister(database *db.DB, replicator *replication.Replicator, registr
 		if err != nil {
 			if replicator != nil && replicator.Enabled() {
 				replicator.RollbackPreparedRegistration(r.Context(), prepared)
+				if consumedInvite != nil {
+					if restoreErr := replicator.RestoreInvite(r.Context(), consumedInvite); restoreErr != nil {
+						slog.Warn("failed to restore remote invite after registration failure", "code", req.InviteCode, "error", restoreErr)
+					}
+				}
 			}
 			// UNIQUE constraint violation → duplicate username → 400.
 			// Any other DB error → 500.
@@ -272,6 +285,15 @@ func handleRegister(database *db.DB, replicator *replication.Replicator, registr
 		if replicator != nil && replicator.Enabled() {
 			if err := replicator.FinalizePreparedRegistration(prepared); err != nil {
 				slog.Error("failed to finalize remote registration", "username", req.Username, "error", err)
+			}
+			if !adminBypass {
+				if err := database.ConsumeInviteAndRevokeBestEffort(req.InviteCode, uid); err != nil {
+					slog.Warn("failed to update local invite cache after remote consume", "code", req.InviteCode, "error", err)
+				}
+			}
+		} else if !adminBypass {
+			if err := database.RevokeInvite(req.InviteCode); err != nil {
+				slog.Warn("failed to revoke invite after successful registration", "code", req.InviteCode, "error", err)
 			}
 		}
 
@@ -685,6 +707,96 @@ func handleDisableTOTP(database *db.DB, pendingStore *auth.PendingTOTPStore) htt
 	}
 }
 
+func handleUpdateProfile(database *db.DB, replicator *replication.Replicator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := r.Context().Value(UserKey).(*db.User)
+		if !ok || user == nil {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{
+				Error:   "UNAUTHORIZED",
+				Message: "not authenticated",
+			})
+			return
+		}
+
+		var req updateProfileRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "malformed request body",
+			})
+			return
+		}
+
+		var username *string
+		if req.Username != nil {
+			sanitized := strings.TrimSpace(sanitizer.Sanitize(*req.Username))
+			if err := auth.ValidateUsername(sanitized); err != nil {
+				writeJSON(w, http.StatusBadRequest, errorResponse{
+					Error:   "INVALID_INPUT",
+					Message: err.Error(),
+				})
+				return
+			}
+			username = &sanitized
+		}
+
+		avatar, avatarAttachmentID, err := normalizeProfileMediaURL(req.Avatar)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: err.Error(),
+			})
+			return
+		}
+		banner, bannerAttachmentID, err := normalizeProfileMediaURL(req.Banner)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: err.Error(),
+			})
+			return
+		}
+
+		if err := database.UpdateUserProfile(user.ID, username, avatar, banner); err != nil {
+			if db.IsUniqueConstraintError(err) {
+				writeJSON(w, http.StatusConflict, errorResponse{
+					Error:   "CONFLICT",
+					Message: "username already exists",
+				})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to update profile",
+			})
+			return
+		}
+
+		if replicator != nil && replicator.Enabled() {
+			if avatarAttachmentID != "" {
+				if mirrorErr := replicator.MirrorUserAsset(r.Context(), user.ID, "avatar", avatarAttachmentID); mirrorErr != nil {
+					slog.Warn("failed to mirror profile avatar to Yandex Disk", "user_id", user.ID, "attachment_id", avatarAttachmentID, "error", mirrorErr)
+				}
+			}
+			if bannerAttachmentID != "" {
+				if mirrorErr := replicator.MirrorUserAsset(r.Context(), user.ID, "banner", bannerAttachmentID); mirrorErr != nil {
+					slog.Warn("failed to mirror profile banner to Yandex Disk", "user_id", user.ID, "attachment_id", bannerAttachmentID, "error", mirrorErr)
+				}
+			}
+		}
+
+		updated, getErr := database.GetUserByID(user.ID)
+		if getErr != nil || updated == nil {
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "profile updated, but failed to load the latest user data",
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, toUserResponse(updated))
+	}
+}
+
 // handleLogout processes POST /api/v1/auth/logout.
 func handleLogout(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -818,10 +930,16 @@ func toUserResponse(u *db.User) *userResponse {
 	if u.Avatar != nil {
 		avatar = *u.Avatar
 	}
+	banner := ""
+	if u.Banner != nil {
+		banner = *u.Banner
+	}
 	resp := &userResponse{
 		ID:          u.ID,
+		ProfileID:   u.ID,
 		Username:    u.Username,
 		Avatar:      avatar,
+		Banner:      banner,
 		Status:      u.Status,
 		RoleID:      u.RoleID,
 		TOTPEnabled: u.TOTPSecret != nil,
@@ -900,4 +1018,49 @@ func isAdminRegistrationSecretCode(cfg config.RegistrationConfig, code string) b
 		return false
 	}
 	return subtle.ConstantTimeCompare(actual, expected) == 1
+}
+
+func normalizeProfileMediaURL(raw *string) (*string, string, error) {
+	if raw == nil {
+		return nil, "", nil
+	}
+
+	value := strings.TrimSpace(*raw)
+	if value == "" {
+		return &value, "", nil
+	}
+
+	const filePrefix = "/api/v1/files/"
+	if !strings.HasPrefix(value, filePrefix) {
+		return nil, "", fmt.Errorf("profile media must use uploaded files from /api/v1/files/{id}")
+	}
+
+	attachmentID := strings.TrimPrefix(value, filePrefix)
+	if cut := strings.IndexAny(attachmentID, "?#"); cut >= 0 {
+		attachmentID = attachmentID[:cut]
+	}
+	if attachmentID == "" || strings.Contains(attachmentID, "/") {
+		return nil, "", fmt.Errorf("invalid profile media id")
+	}
+	for _, r := range attachmentID {
+		if !isAllowedProfileMediaRune(r) {
+			return nil, "", fmt.Errorf("invalid profile media id")
+		}
+	}
+
+	normalized := filePrefix + attachmentID
+	return &normalized, attachmentID, nil
+}
+
+func isAllowedProfileMediaRune(r rune) bool {
+	if r >= 'a' && r <= 'z' {
+		return true
+	}
+	if r >= 'A' && r <= 'Z' {
+		return true
+	}
+	if r >= '0' && r <= '9' {
+		return true
+	}
+	return r == '-' || r == '_'
 }

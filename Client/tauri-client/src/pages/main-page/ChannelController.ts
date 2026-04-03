@@ -15,7 +15,7 @@ import type { MessageListComponent } from "@components/MessageList";
 import { createMessageInput } from "@components/MessageInput";
 import type { MessageInputComponent } from "@components/MessageInput";
 import { createTypingIndicator } from "@components/TypingIndicator";
-import { getChannelMessages, setMessagePinned } from "@stores/messages.store";
+import { addPendingSend, getChannelMessages, setMessagePinned } from "@stores/messages.store";
 import type { MessageController } from "./MessageController";
 import type { PendingDeleteManager } from "./MessageController";
 import type { ReactionController } from "./ReactionController";
@@ -23,6 +23,8 @@ import { updateChatHeaderForDm } from "./ChatHeader";
 import type { ChatHeaderRefs } from "./ChatHeader";
 import { dmStore } from "@stores/dm.store";
 import { membersStore } from "@stores/members.store";
+import { openUserProfile } from "@components/UserProfileOverlay";
+import { formatStatusForDmHeader } from "@lib/presence";
 
 const log = createLogger("channel-ctrl");
 
@@ -85,6 +87,7 @@ export function createChannelController(
   let messageList: MessageListComponent | null = null;
   let messageInput: MessageInputComponent | null = null;
   let typingIndicator: MountableComponent | null = null;
+  let channelUnsubs: Array<() => void> = [];
 
   function destroyChannel(): void {
     pendingDeleteManager.cleanup();
@@ -106,6 +109,10 @@ export function createChannelController(
       messageInput.destroy?.();
       messageInput = null;
     }
+    for (const unsub of channelUnsubs) {
+      unsub();
+    }
+    channelUnsubs = [];
     clearChildren(slots.messagesSlot);
     clearChildren(slots.typingSlot);
     clearChildren(slots.inputSlot);
@@ -202,7 +209,7 @@ export function createChannelController(
           showToast("Not connected — message not sent", "error");
           return;
         }
-        ws.send({
+        const requestID = ws.send({
           type: "chat_send",
           payload: {
             channel_id: channelId,
@@ -211,6 +218,7 @@ export function createChannelController(
             attachments,
           },
         });
+        addPendingSend(requestID, channelId, content, replyTo, attachments);
       },
       onUploadFile: async (file: File) => {
         try {
@@ -266,17 +274,56 @@ export function createChannelController(
 
     // Update header
     if (chatHeaderRefs !== null && channelType === "dm") {
-      // Look up the recipient's actual status from DM store or members store
-      const dmChannel = dmStore.getState().channels.find((c) => c.channelId === channelId);
-      let recipientStatus = "Offline";
-      if (dmChannel !== undefined) {
-        const member = membersStore.getState().members.get(dmChannel.recipient.id);
-        recipientStatus = member?.status ?? dmChannel.recipient.status ?? "Offline";
-      }
-      const displayStatus = recipientStatus.charAt(0).toUpperCase() + recipientStatus.slice(1);
-      updateChatHeaderForDm(chatHeaderRefs, { username: channelName, status: displayStatus });
+      const updateDmHeader = (): void => {
+        const dmChannel = dmStore.getState().channels.find((c) => c.channelId === channelId);
+        const recipientID = dmChannel?.recipient.id ?? 0;
+        let statusValue = dmChannel?.recipient.status ?? "offline";
+        let lastSeenValue = dmChannel?.recipient.lastSeen ?? null;
+        if (dmChannel !== undefined) {
+          const member = membersStore.getState().members.get(dmChannel.recipient.id);
+          statusValue = member?.status ?? statusValue;
+          lastSeenValue = member?.lastSeen ?? lastSeenValue;
+        }
+        updateChatHeaderForDm(chatHeaderRefs, {
+          username: channelName,
+          status: formatStatusForDmHeader(statusValue, lastSeenValue),
+          profileID: recipientID > 0 ? recipientID : undefined,
+        });
+      };
+      updateDmHeader();
+      channelUnsubs.push(
+        membersStore.subscribeSelector(
+          (s) => s.members,
+          () => updateDmHeader(),
+        ),
+      );
+      channelUnsubs.push(
+        dmStore.subscribeSelector(
+          (s) => s.channels,
+          () => updateDmHeader(),
+        ),
+      );
+      chatHeaderRefs.nameEl.classList.add("ch-name--clickable");
+      chatHeaderRefs.hashEl.classList.add("ch-name--clickable");
+      const openRecipientProfile = (): void => {
+        const dmChannel = dmStore.getState().channels.find((c) => c.channelId === channelId);
+        if (dmChannel === undefined) {
+          return;
+        }
+        openUserProfile({
+          id: dmChannel.recipient.id,
+          username: dmChannel.recipient.username,
+          avatar: dmChannel.recipient.avatar,
+          status: dmChannel.recipient.status,
+          lastSeen: dmChannel.recipient.lastSeen ?? undefined,
+        });
+      };
+      chatHeaderRefs.nameEl.addEventListener("click", openRecipientProfile, { signal });
+      chatHeaderRefs.hashEl.addEventListener("click", openRecipientProfile, { signal });
     } else if (chatHeaderRefs !== null) {
       updateChatHeaderForDm(chatHeaderRefs, null);
+      chatHeaderRefs.nameEl.classList.remove("ch-name--clickable");
+      chatHeaderRefs.hashEl.classList.remove("ch-name--clickable");
       if (chatHeaderName !== null) {
         setText(chatHeaderName, channelName);
       }

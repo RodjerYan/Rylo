@@ -27,8 +27,9 @@ type wsMsg struct {
 // ---------------------------------------------------------------------------
 
 type presencePayload struct {
-	UserID int64  `json:"user_id"`
-	Status string `json:"status"`
+	UserID   int64   `json:"user_id"`
+	Status   string  `json:"status"`
+	LastSeen *string `json:"last_seen,omitempty"`
 }
 
 type memberUserPayload struct {
@@ -43,15 +44,16 @@ type memberJoinPayload struct {
 }
 
 type chatMessagePayload struct {
-	ID          int64              `json:"id"`
-	ChannelID   int64              `json:"channel_id"`
-	User        memberUserPayload  `json:"user"`
-	Content     string             `json:"content"`
-	ReplyTo     *int64             `json:"reply_to"`
-	Timestamp   string             `json:"timestamp"`
-	Attachments []map[string]any   `json:"attachments"`
-	Reactions   []any              `json:"reactions"`
-	Pinned      bool               `json:"pinned"`
+	ID           int64             `json:"id"`
+	ChannelID    int64             `json:"channel_id"`
+	User         memberUserPayload `json:"user"`
+	Content      string            `json:"content"`
+	ReplyTo      *int64            `json:"reply_to"`
+	Timestamp    string            `json:"timestamp"`
+	SourceServer string            `json:"source_server,omitempty"`
+	Attachments  []map[string]any  `json:"attachments"`
+	Reactions    []any             `json:"reactions"`
+	Pinned       bool              `json:"pinned"`
 }
 
 type memberUpdatePayload struct {
@@ -147,16 +149,17 @@ type serverRestartPayload struct {
 
 // dmChannelOpenPayload is sent when a DM is opened/reopened for a user.
 type dmChannelOpenPayload struct {
-	ChannelID int64     `json:"channel_id"`
+	ChannelID int64         `json:"channel_id"`
 	Recipient dmUserPayload `json:"recipient"`
 }
 
 // dmUserPayload is the public-facing shape for a DM participant in WS events.
 type dmUserPayload struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Avatar   string `json:"avatar"`
-	Status   string `json:"status"`
+	ID       int64   `json:"id"`
+	Username string  `json:"username"`
+	Avatar   string  `json:"avatar"`
+	Status   string  `json:"status"`
+	LastSeen *string `json:"last_seen,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -213,10 +216,10 @@ func buildAuthError(message string) []byte {
 // ---------------------------------------------------------------------------
 
 // buildPresenceMsg constructs a presence broadcast payload.
-func buildPresenceMsg(userID int64, status string) []byte {
+func buildPresenceMsg(userID int64, status string, lastSeen *string) []byte {
 	return buildJSON(wsMsg{
 		Type:    MsgTypePresence,
-		Payload: presencePayload{UserID: userID, Status: status},
+		Payload: presencePayload{UserID: userID, Status: status, LastSeen: lastSeen},
 	})
 }
 
@@ -237,7 +240,7 @@ func buildMemberJoin(user *db.User, roleName string) []byte {
 
 // buildChatMessage constructs a chat_message broadcast envelope.
 // Includes role in user object and empty reactions array for consistency with REST API.
-func buildChatMessage(msgID, channelID, userID int64, username string, avatar *string, roleName string, content string, timestamp string, replyTo *int64, attachments []map[string]any) []byte {
+func buildChatMessage(msgID, channelID, userID int64, username string, avatar *string, roleName string, content string, timestamp string, replyTo *int64, attachments []map[string]any, sourceServer string) []byte {
 	if attachments == nil {
 		attachments = []map[string]any{}
 	}
@@ -252,12 +255,13 @@ func buildChatMessage(msgID, channelID, userID int64, username string, avatar *s
 				Avatar:   avatar,
 				Role:     roleName,
 			},
-			Content:     content,
-			ReplyTo:     replyTo,
-			Timestamp:   timestamp,
-			Attachments: attachments,
-			Reactions:   []any{},
-			Pinned:      false,
+			Content:      content,
+			ReplyTo:      replyTo,
+			Timestamp:    timestamp,
+			SourceServer: sourceServer,
+			Attachments:  attachments,
+			Reactions:    []any{},
+			Pinned:       false,
 		},
 	})
 }
@@ -448,6 +452,7 @@ func buildDMChannelOpen(channelID int64, recipient *db.User) []byte {
 				Username: recipient.Username,
 				Avatar:   avatarStr,
 				Status:   recipient.Status,
+				LastSeen: recipient.LastSeen,
 			},
 		},
 	})

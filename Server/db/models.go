@@ -8,6 +8,7 @@ type User struct {
 	Username     string
 	PasswordHash string
 	Avatar       *string
+	Banner       *string
 	RoleID       int64
 	TOTPSecret   *string
 	Status       string
@@ -32,14 +33,17 @@ type Session struct {
 
 // Invite represents a row in the invites table.
 type Invite struct {
-	ID        int64
-	Code      string
-	CreatedBy int64
-	Uses      int
-	MaxUses   *int
-	ExpiresAt *string
-	Revoked   bool
-	CreatedAt string
+	ID                 int64
+	Code               string
+	CreatedBy          int64
+	CreatedByUsername  *string
+	RedeemedBy         *int64
+	RedeemedByUsername *string
+	Uses               int
+	MaxUses            *int
+	ExpiresAt          *string
+	Revoked            bool
+	CreatedAt          string
 }
 
 // Role represents a row in the roles table.
@@ -98,12 +102,12 @@ type ReactionCount struct {
 
 // MessageSearchResult is a row returned by the FTS5 message search.
 type MessageSearchResult struct {
-	MessageID   int64          `json:"message_id"`
-	ChannelID   int64          `json:"channel_id"`
-	ChannelName string         `json:"channel_name"`
-	User        UserPublic     `json:"user"`
-	Content     string         `json:"content"`
-	Timestamp   string         `json:"timestamp"`
+	MessageID   int64      `json:"message_id"`
+	ChannelID   int64      `json:"channel_id"`
+	ChannelName string     `json:"channel_name"`
+	User        UserPublic `json:"user"`
+	Content     string     `json:"content"`
+	Timestamp   string     `json:"timestamp"`
 }
 
 // UserPublic is the public-facing user shape for API responses.
@@ -115,17 +119,17 @@ type UserPublic struct {
 
 // MessageAPIResponse matches the API.md shape for GET /channels/{id}/messages.
 type MessageAPIResponse struct {
-	ID          int64           `json:"id"`
-	ChannelID   int64           `json:"channel_id"`
-	User        UserPublic      `json:"user"`
-	Content     string          `json:"content"`
-	ReplyTo     *int64          `json:"reply_to"`
+	ID          int64            `json:"id"`
+	ChannelID   int64            `json:"channel_id"`
+	User        UserPublic       `json:"user"`
+	Content     string           `json:"content"`
+	ReplyTo     *int64           `json:"reply_to"`
 	Attachments []AttachmentInfo `json:"attachments"`
-	Reactions   []ReactionInfo  `json:"reactions"`
-	Pinned      bool            `json:"pinned"`
-	EditedAt    *string         `json:"edited_at"`
-	Deleted     bool            `json:"deleted"`
-	Timestamp   string          `json:"timestamp"`
+	Reactions   []ReactionInfo   `json:"reactions"`
+	Pinned      bool             `json:"pinned"`
+	EditedAt    *string          `json:"edited_at"`
+	Deleted     bool             `json:"deleted"`
+	Timestamp   string           `json:"timestamp"`
 }
 
 // AttachmentInfo is the attachment shape in API responses.

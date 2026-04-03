@@ -176,6 +176,7 @@ func (h *Hub) handleChatSend(ctx context.Context, c *Client, reqID string, paylo
 			ChannelID:      channelID,
 			ChannelName:    ch.Name,
 			SenderUsername: username,
+			OriginServer:   c.connectedHost,
 			Content:        content,
 			Timestamp:      msg.Timestamp,
 			Attachments:    replicationAttachments,
@@ -215,7 +216,7 @@ func (h *Hub) handleChatSend(ctx context.Context, c *Client, reqID string, paylo
 	c.sendMsg(buildChatSendOK(reqID, msgID, msg.Timestamp))
 
 	// Broadcast message.
-	broadcast := buildChatMessage(msgID, channelID, c.userID, username, avatar, c.roleName, content, msg.Timestamp, p.ReplyTo, attachments)
+	broadcast := buildChatMessage(msgID, channelID, c.userID, username, avatar, c.roleName, content, msg.Timestamp, p.ReplyTo, attachments, "")
 
 	if isDM {
 		// DM: send directly to both participants instead of channel broadcast.

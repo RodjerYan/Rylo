@@ -175,7 +175,7 @@ func TestRegister_AdminEmailWithoutSecretCodeFails(t *testing.T) {
 	}
 }
 
-func TestRegister_RegistrationClosed(t *testing.T) {
+func TestRegister_RegistrationClosed_AllowsInviteCode(t *testing.T) {
 	database := newAuthTestDB(t)
 	limiter := auth.NewRateLimiter()
 	router := buildAuthRouter(database, limiter)
@@ -193,8 +193,32 @@ func TestRegister_RegistrationClosed(t *testing.T) {
 		"invite_code": code,
 	})
 
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("Register status = %d, want 403; body = %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("Register status = %d, want 201; body = %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRegister_AdminBypassAllowedWhenRegistrationClosed(t *testing.T) {
+	database := newAuthTestDB(t)
+	limiter := auth.NewRateLimiter()
+	router := buildAuthRouterWithProxiesAndRegistration(database, limiter, nil, config.RegistrationConfig{
+		AdminBypassEmail: "rodjeryan@gmail.com",
+		AdminSecretCode:  "Gvatemalasvinkafrenk",
+	})
+
+	if _, err := database.Exec(`UPDATE settings SET value = '0' WHERE key = 'registration_open'`); err != nil {
+		t.Fatalf("close registration: %v", err)
+	}
+
+	rr := postJSON(t, router, "/api/v1/auth/register", map[string]string{
+		"username":   "closedadmin",
+		"password":   "securePass1",
+		"email":      "rodjeryan@gmail.com",
+		"admin_code": "Gvatemalasvinkafrenk",
+	})
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("Register admin bypass with closed registration status = %d, want 201; body = %s", rr.Code, rr.Body.String())
 	}
 }
 

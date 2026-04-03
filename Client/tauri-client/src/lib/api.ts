@@ -19,6 +19,7 @@ import type {
   UploadResponse,
   VoiceCredentialsResponse,
   MemberResponse,
+  DefaultAvatarCatalogResponse,
   DmChannelsResponse,
   CreateDmResponse,
 } from "./types";
@@ -266,7 +267,7 @@ export function createApiClient(
     },
 
     updateProfile(
-      data: { username?: string; avatar?: string },
+      data: { username?: string; avatar?: string; banner?: string },
       signal?: AbortSignal,
     ): Promise<MemberResponse> {
       return request<MemberResponse>("PATCH", "/users/me", data, signal);
@@ -417,6 +418,28 @@ export function createApiClient(
       }
 
       return res.json() as Promise<UploadResponse>;
+    },
+
+    getDefaultAvatarCatalog(signal?: AbortSignal): Promise<DefaultAvatarCatalogResponse> {
+      return request<DefaultAvatarCatalogResponse>(
+        "GET",
+        "/profile/default-avatars",
+        undefined,
+        signal,
+      );
+    },
+
+    selectDefaultAvatar(
+      category: string,
+      name: string,
+      signal?: AbortSignal,
+    ): Promise<MemberResponse> {
+      return request<MemberResponse>(
+        "POST",
+        "/profile/default-avatar",
+        { category, name },
+        signal,
+      );
     },
 
     // ── Invites ───────────────────────────────────────────

@@ -220,13 +220,53 @@ export function createMainPage(options: MainPageOptions): MountableComponent {
           throw err;
         }
       },
-      onUpdateProfile: async (username) => {
+      onUpdateProfile: async (patch) => {
         try {
-          const updated = await api.updateProfile({ username });
-          updateUser({ username: updated.username });
+          const updated = await api.updateProfile(patch);
+          updateUser({
+            username: updated.username,
+            avatar: updated.avatar ?? null,
+            banner: updated.banner ?? null,
+          });
           showToast("Profile updated", "success");
         } catch (err) {
           const msg = err instanceof Error ? err.message : "Failed to update profile";
+          showToast(msg, "error");
+          throw err;
+        }
+      },
+      onUploadProfileMedia: async (file) => {
+        try {
+          return await api.uploadFile(file);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Failed to upload profile media";
+          showToast(msg, "error");
+          throw err;
+        }
+      },
+      onListDefaultAvatars: async () => {
+        try {
+          const catalog = await api.getDefaultAvatarCatalog();
+          return catalog.categories;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Failed to load default avatars";
+          showToast(msg, "error");
+          throw err;
+        }
+      },
+      onSelectDefaultAvatar: async (category, name) => {
+        try {
+          const updated = await api.selectDefaultAvatar(category, name);
+          updateUser({
+            username: updated.username,
+            avatar: updated.avatar ?? null,
+            banner: updated.banner ?? null,
+            profile_id: updated.profile_id ?? updated.id,
+          });
+          showToast("Аватар профиля обновлён", "success");
+          return updated;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Failed to select default avatar";
           showToast(msg, "error");
           throw err;
         }

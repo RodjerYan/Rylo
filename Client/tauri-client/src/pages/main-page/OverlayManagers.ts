@@ -23,20 +23,18 @@ const log = createLogger("overlays");
 // ---------------------------------------------------------------------------
 
 export function mapInviteResponse(r: InviteResponse): InviteItem {
-  const extra = r as unknown as Record<string, unknown>;
-  const createdBy = typeof extra["created_by"] === "object"
-    && extra["created_by"] !== null
-    ? (extra["created_by"] as { username?: string }).username ?? "unknown"
-    : "unknown";
-  const uses = r.use_count
-    ?? (typeof extra["uses"] === "number" ? (extra["uses"]) : 0);
+  const createdBy = r.created_by?.username ?? "unknown";
+  const uses = r.use_count ?? r.uses ?? 0;
+  const status = r.status ?? "active";
   return {
     code: r.code,
     createdBy,
-    createdAt: r.expires_at ?? "",
+    createdAt: r.created_at ?? "",
     uses,
     maxUses: r.max_uses,
     expiresAt: r.expires_at,
+    status,
+    redeemedBy: r.redeemed_by?.username ?? null,
   };
 }
 

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -10,6 +12,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -31,6 +34,25 @@ type uploadResponse struct {
 	Height   *int   `json:"height,omitempty"`
 }
 
+type defaultAvatarItemResponse struct {
+	Name       string `json:"name"`
+	PreviewURL string `json:"preview_url"`
+}
+
+type defaultAvatarCategoryResponse struct {
+	Name    string                      `json:"name"`
+	Avatars []defaultAvatarItemResponse `json:"avatars"`
+}
+
+type defaultAvatarCatalogResponse struct {
+	Categories []defaultAvatarCategoryResponse `json:"categories"`
+}
+
+type selectDefaultAvatarRequest struct {
+	Category string `json:"category"`
+	Name     string `json:"name"`
+}
+
 // MountUploadRoutes registers upload and file-serving endpoints.
 // allowedOrigins controls the Access-Control-Allow-Origin header on served files.
 func MountUploadRoutes(r chi.Router, database *db.DB, store *storage.Storage, allowedOrigins []string, replicator *replication.Replicator) {
@@ -39,6 +61,15 @@ func MountUploadRoutes(r chi.Router, database *db.DB, store *storage.Storage, al
 		AuthMiddleware(database),
 		MaxBodySize(100<<20),
 	).Post("/api/v1/uploads", handleUpload(database, store, replicator))
+
+	// Default avatars (stored in /RyloData/Avatars on Yandex Disk).
+	r.With(AuthMiddleware(database)).
+		Get("/api/v1/profile/default-avatars", handleListDefaultAvatars(replicator))
+	r.With(AuthMiddleware(database)).
+		Get("/api/v1/profile/default-avatars/{category}/{name}", handleServeDefaultAvatarPreview(replicator))
+	r.With(AuthMiddleware(database)).
+		Post("/api/v1/profile/default-avatar", handleSelectDefaultAvatar(database, store, replicator))
+
 	// File serving is public (URLs are unguessable UUIDs).
 	r.Get("/api/v1/files/{id}", handleServeFile(database, store, allowedOrigins, replicator))
 }
@@ -238,5 +269,188 @@ func handleServeFile(database *db.DB, store *storage.Storage, allowedOrigins []s
 			modTime = info.ModTime()
 		}
 		http.ServeContent(w, r, att.Filename, modTime, f)
+	}
+}
+
+func handleListDefaultAvatars(replicator *replication.Replicator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if replicator == nil || !replicator.Enabled() {
+			writeJSON(w, http.StatusOK, defaultAvatarCatalogResponse{
+				Categories: []defaultAvatarCategoryResponse{},
+			})
+			return
+		}
+
+		catalog, err := replicator.ListDefaultAvatarCatalog(r.Context())
+		if err != nil {
+			slog.Warn("failed to list default avatars from Yandex Disk", "error", err)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to list default avatars",
+			})
+			return
+		}
+
+		categories := make([]defaultAvatarCategoryResponse, 0, len(catalog))
+		for _, category := range catalog {
+			avatars := make([]defaultAvatarItemResponse, 0, len(category.Avatars))
+			for _, avatar := range category.Avatars {
+				avatars = append(avatars, defaultAvatarItemResponse{
+					Name:       avatar.Name,
+					PreviewURL: "/api/v1/profile/default-avatars/" + url.PathEscape(category.Name) + "/" + url.PathEscape(avatar.Name),
+				})
+			}
+			categories = append(categories, defaultAvatarCategoryResponse{
+				Name:    category.Name,
+				Avatars: avatars,
+			})
+		}
+
+		writeJSON(w, http.StatusOK, defaultAvatarCatalogResponse{
+			Categories: categories,
+		})
+	}
+}
+
+func handleServeDefaultAvatarPreview(replicator *replication.Replicator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if replicator == nil || !replicator.Enabled() {
+			http.NotFound(w, r)
+			return
+		}
+
+		category := chi.URLParam(r, "category")
+		name := chi.URLParam(r, "name")
+		data, filename, err := replicator.GetDefaultAvatarBytes(r.Context(), category, name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		contentType := http.DetectContentType(data)
+		if !strings.HasPrefix(contentType, "image/") {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "default avatar is not an image",
+			})
+			return
+		}
+
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filename}))
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		http.ServeContent(w, r, filename, time.Now().UTC(), bytes.NewReader(data))
+	}
+}
+
+func handleSelectDefaultAvatar(database *db.DB, store *storage.Storage, replicator *replication.Replicator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if replicator == nil || !replicator.Enabled() {
+			writeJSON(w, http.StatusServiceUnavailable, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "default avatars are unavailable while Yandex Disk sync is disabled",
+			})
+			return
+		}
+
+		user, ok := r.Context().Value(UserKey).(*db.User)
+		if !ok || user == nil {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{
+				Error:   "UNAUTHORIZED",
+				Message: "not authenticated",
+			})
+			return
+		}
+
+		var req selectDefaultAvatarRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "malformed request body",
+			})
+			return
+		}
+
+		data, filename, err := replicator.GetDefaultAvatarBytes(r.Context(), req.Category, req.Name)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "default avatar not found",
+			})
+			return
+		}
+
+		fileID := uuid.New().String()
+		if err := store.Save(fileID, bytes.NewReader(data)); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "failed to save selected avatar",
+			})
+			return
+		}
+
+		mimeType := http.DetectContentType(data)
+		if !strings.HasPrefix(mimeType, "image/") {
+			_ = store.Delete(fileID)
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "selected avatar is not an image",
+			})
+			return
+		}
+
+		var width, height *int
+		cfg, _, decodeErr := image.DecodeConfig(bytes.NewReader(data))
+		if decodeErr == nil {
+			w2 := cfg.Width
+			h2 := cfg.Height
+			width = &w2
+			height = &h2
+		}
+
+		if err := database.CreateAttachment(fileID, filename, fileID, mimeType, int64(len(data)), width, height); err != nil {
+			_ = store.Delete(fileID)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to persist selected avatar",
+			})
+			return
+		}
+
+		if err := replicator.MirrorAttachment(r.Context(), fileID, data); err != nil {
+			_ = store.Delete(fileID)
+			_ = database.DeleteAttachmentRecord(fileID)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to mirror selected avatar",
+			})
+			return
+		}
+
+		avatarURL := "/api/v1/files/" + fileID
+		if err := database.UpdateUserProfile(user.ID, nil, &avatarURL, nil); err != nil {
+			_ = store.Delete(fileID)
+			_ = database.DeleteAttachmentRecord(fileID)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to update user avatar",
+			})
+			return
+		}
+
+		if err := replicator.MirrorUserAsset(r.Context(), user.ID, "avatar", fileID); err != nil {
+			slog.Warn("failed to mirror selected default avatar as user asset", "user_id", user.ID, "attachment_id", fileID, "error", err)
+		}
+
+		updated, err := database.GetUserByID(user.ID)
+		if err != nil || updated == nil {
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "avatar updated, but failed to load the latest profile",
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, toUserResponse(updated))
 	}
 }

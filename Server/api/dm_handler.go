@@ -123,6 +123,7 @@ func handleCreateDM(database *db.DB) http.HandlerFunc {
 			Username: recipient.Username,
 			Avatar:   avatarStr,
 			Status:   recipient.Status,
+			LastSeen: recipient.LastSeen,
 		}
 
 		status := http.StatusOK

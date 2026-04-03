@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rylo/server/db"
 	"github.com/rylo/server/permissions"
+	"github.com/rylo/server/replication"
 )
 
 // createInviteRequest is the JSON body for POST /api/v1/invites.
@@ -20,30 +21,39 @@ type createInviteRequest struct {
 
 // inviteResponse is the API shape for an invite.
 type inviteResponse struct {
-	ID        int64   `json:"id"`
-	Code      string  `json:"code"`
-	MaxUses   *int    `json:"max_uses"`
-	Uses      int     `json:"uses"`
-	ExpiresAt *string `json:"expires_at"`
-	Revoked   bool    `json:"revoked"`
-	CreatedAt string  `json:"created_at"`
+	ID         int64        `json:"id"`
+	Code       string       `json:"code"`
+	MaxUses    *int         `json:"max_uses"`
+	Uses       int          `json:"uses"`
+	UseCount   int          `json:"use_count"`
+	ExpiresAt  *string      `json:"expires_at"`
+	Revoked    bool         `json:"revoked"`
+	Status     string       `json:"status"`
+	CreatedBy  *inviteActor `json:"created_by,omitempty"`
+	RedeemedBy *inviteActor `json:"redeemed_by,omitempty"`
+	CreatedAt  string       `json:"created_at"`
+}
+
+type inviteActor struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
 }
 
 // MountInviteRoutes registers invite endpoints on the given router.
 // All routes require authentication. Any authenticated user can create invites,
 // while elevated users can manage every invite on the server.
-func MountInviteRoutes(r chi.Router, database *db.DB) {
+func MountInviteRoutes(r chi.Router, database *db.DB, replicator *replication.Replicator) {
 	r.Route("/api/v1/invites", func(r chi.Router) {
 		r.Use(AuthMiddleware(database))
 
-		r.Post("/", handleCreateInvite(database))
+		r.Post("/", handleCreateInvite(database, replicator))
 		r.Get("/", handleListInvites(database))
-		r.Delete("/{code}", handleRevokeInvite(database))
+		r.Delete("/{code}", handleRevokeInvite(database, replicator))
 	})
 }
 
 // handleCreateInvite processes POST /api/v1/invites.
-func handleCreateInvite(database *db.DB) http.HandlerFunc {
+func handleCreateInvite(database *db.DB, replicator *replication.Replicator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createInviteRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -69,6 +79,9 @@ func handleCreateInvite(database *db.DB) http.HandlerFunc {
 		}
 
 		var expiresAt *time.Time
+		if req.MaxUses <= 0 {
+			req.MaxUses = 1
+		}
 		if req.ExpiresInHours > 0 {
 			t := time.Now().Add(time.Duration(req.ExpiresInHours) * time.Hour)
 			expiresAt = &t
@@ -92,6 +105,17 @@ func handleCreateInvite(database *db.DB) http.HandlerFunc {
 				Message: "failed to retrieve invite",
 			})
 			return
+		}
+		if replicator != nil && replicator.Enabled() {
+			if err := replicator.MirrorInvite(r.Context(), inv); err != nil {
+				_ = database.RevokeInvite(code)
+				slog.Error("handleCreateInvite MirrorInvite", "err", err, "code", code)
+				writeJSON(w, http.StatusInternalServerError, errorResponse{
+					Error:   "SERVER_ERROR",
+					Message: "failed to replicate invite to Yandex Disk",
+				})
+				return
+			}
 		}
 
 		writeJSON(w, http.StatusCreated, toInviteResponse(inv))
@@ -139,7 +163,7 @@ func handleListInvites(database *db.DB) http.HandlerFunc {
 }
 
 // handleRevokeInvite processes DELETE /api/v1/invites/:code.
-func handleRevokeInvite(database *db.DB) http.HandlerFunc {
+func handleRevokeInvite(database *db.DB, replicator *replication.Replicator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code := chi.URLParam(r, "code")
 		user, ok := r.Context().Value(UserKey).(*db.User)
@@ -184,6 +208,11 @@ func handleRevokeInvite(database *db.DB) http.HandlerFunc {
 			})
 			return
 		}
+		if replicator != nil && replicator.Enabled() {
+			if err := replicator.RevokeInvite(r.Context(), code); err != nil {
+				slog.Error("handleRevokeInvite RevokeInvite remote", "err", err, "code", code)
+			}
+		}
 
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -206,13 +235,51 @@ func toInviteResponse(inv *db.Invite) inviteResponse {
 		v := *inv.MaxUses
 		maxUses = &v
 	}
-	return inviteResponse{
-		ID:        inv.ID,
-		Code:      inv.Code,
-		MaxUses:   maxUses,
-		Uses:      inv.Uses,
-		ExpiresAt: inv.ExpiresAt,
-		Revoked:   inv.Revoked,
-		CreatedAt: inv.CreatedAt,
+	var createdBy *inviteActor
+	if inv.CreatedByUsername != nil {
+		createdBy = &inviteActor{
+			ID:       inv.CreatedBy,
+			Username: *inv.CreatedByUsername,
+		}
 	}
+	var redeemedBy *inviteActor
+	if inv.RedeemedBy != nil && inv.RedeemedByUsername != nil {
+		redeemedBy = &inviteActor{
+			ID:       *inv.RedeemedBy,
+			Username: *inv.RedeemedByUsername,
+		}
+	}
+
+	status := "active"
+	if inv.ExpiresAt != nil {
+		if expiresAt, err := parseInviteTime(*inv.ExpiresAt); err == nil && !expiresAt.After(time.Now().UTC()) {
+			status = "expired"
+		}
+	}
+	if inv.Uses > 0 && inv.Revoked {
+		status = "used"
+	} else if inv.Revoked {
+		status = "revoked"
+	}
+
+	return inviteResponse{
+		ID:         inv.ID,
+		Code:       inv.Code,
+		MaxUses:    maxUses,
+		Uses:       inv.Uses,
+		UseCount:   inv.Uses,
+		ExpiresAt:  inv.ExpiresAt,
+		Revoked:    inv.Revoked,
+		Status:     status,
+		CreatedBy:  createdBy,
+		RedeemedBy: redeemedBy,
+		CreatedAt:  inv.CreatedAt,
+	}
+}
+
+func parseInviteTime(v string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t, nil
+	}
+	return time.Parse("2006-01-02 15:04:05", v)
 }

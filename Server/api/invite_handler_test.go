@@ -17,7 +17,7 @@ import (
 func buildInviteRouter(database *db.DB, limiter *auth.RateLimiter) http.Handler {
 	r := chi.NewRouter()
 	api.MountAuthRoutes(r, database, limiter, nil, nil, config.RegistrationConfig{})
-	api.MountInviteRoutes(r, database)
+	api.MountInviteRoutes(r, database, nil)
 	return r
 }
 

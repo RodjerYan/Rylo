@@ -11,6 +11,7 @@ import { membersStore, type Member } from "@stores/members.store";
 import { authStore } from "@stores/auth.store";
 import { createMemberContextMenu } from "@components/AdminActions";
 import type { UserStatus } from "@lib/types";
+import { openUserProfile } from "@components/UserProfileOverlay";
 
 /** Options for configuring admin action callbacks on the member list. */
 export interface MemberListOptions {
@@ -102,6 +103,16 @@ function createMemberItem(
   setText(name, member.username);
 
   appendChildren(item, avatar, name);
+
+  item.addEventListener("click", () => {
+    openUserProfile({
+      id: member.id,
+      username: member.username,
+      avatar: member.avatar,
+      status: member.status,
+      role: member.role,
+    });
+  }, { signal });
 
   // Context menu for admin actions
   item.addEventListener("contextmenu", (e) => {

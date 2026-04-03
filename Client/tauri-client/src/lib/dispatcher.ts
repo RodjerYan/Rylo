@@ -46,6 +46,7 @@ import {
   removeDmChannel,
   updateDmLastMessage,
   updateDmLastMessagePreview,
+  updateDmRecipientPresence,
 } from "@stores/dm.store";
 import type { DmChannel } from "@stores/dm.store";
 import type { DmChannelPayload } from "./types";
@@ -55,6 +56,38 @@ import { createLogger } from "./logger";
 import { ServerMessageType as S } from "./protocolTypes";
 
 const log = createLogger("dispatcher");
+const AUTO_SWITCH_COOLDOWN_MS = 10_000;
+let lastAutoSwitchAt = 0;
+
+function normalizeHost(raw: string): string {
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed.length === 0) {
+    return "";
+  }
+  const withoutScheme = trimmed.replace(/^(https?:\/\/|wss?:\/\/)/i, "");
+  return withoutScheme.replace(/\/+$/, "");
+}
+
+function queueAutoSwitchToSourceServer(sourceServer: string): void {
+  const target = normalizeHost(sourceServer);
+  if (target === "") {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastAutoSwitchAt < AUTO_SWITCH_COOLDOWN_MS) {
+    return;
+  }
+  lastAutoSwitchAt = now;
+
+  sessionStorage.setItem("rylo:quick-switch-target", target);
+  sessionStorage.setItem("rylo:logout-reason", "switch");
+  setTransientError("Получено сообщение с другого сервера. Выполняем автоподключение...");
+
+  window.setTimeout(() => {
+    clearAuth();
+  }, 250);
+}
 
 /** Map a server DM channel payload to the client DmChannel type. */
 function mapDmPayload(p: DmChannelPayload): DmChannel {
@@ -65,6 +98,7 @@ function mapDmPayload(p: DmChannelPayload): DmChannel {
       username: p.recipient.username,
       avatar: p.recipient.avatar,
       status: p.recipient.status,
+      lastSeen: p.recipient.last_seen ?? null,
     },
     lastMessageId: p.last_message_id,
     lastMessage: p.last_message,
@@ -207,6 +241,12 @@ export function wireDispatcher(ws: WsClient): DispatcherCleanup {
 
       // Fire desktop notification, taskbar flash, and sound
       notifyIncomingMessage(payload);
+
+      const sourceServer = normalizeHost(payload.source_server ?? "");
+      const currentHost = normalizeHost(sessionStorage.getItem("rylo:current-host") ?? "");
+      if (isDm && !isOwnMessage && sourceServer !== "" && sourceServer !== currentHost) {
+        queueAutoSwitchToSourceServer(sourceServer);
+      }
     }),
   );
 
@@ -251,7 +291,8 @@ export function wireDispatcher(ws: WsClient): DispatcherCleanup {
 
   unsubs.push(
     ws.on(S.PRESENCE, (payload) => {
-      updatePresence(payload.user_id, payload.status);
+      updatePresence(payload.user_id, payload.status, payload.last_seen);
+      updateDmRecipientPresence(payload.user_id, payload.status, payload.last_seen);
     }),
   );
 

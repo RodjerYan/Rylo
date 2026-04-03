@@ -1,6 +1,6 @@
 [package]
 name = "rylo-client"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 description = "Rylo Desktop Client"
 
@@ -12,8 +12,9 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [features]
-default = ["devtools"]
+default = ["devtools", "custom-protocol"]
 devtools = ["tauri/devtools"]
+custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }

@@ -111,12 +111,12 @@ func run(log *slog.Logger, logBuf *admin.RingBuffer) error {
 	if err != nil {
 		return fmt.Errorf("configuring Yandex Disk replication: %w", err)
 	}
-	replicator.Start()
-	defer replicator.Stop()
 
 	// ── 5. Build HTTP router ───────────────────────────────────────────────
 	router, hub, routerCleanup := api.NewRouter(cfg, database, version, logBuf, replicator)
 	defer routerCleanup()
+	replicator.Start()
+	defer replicator.Stop()
 
 	// ── 6. Start server ────────────────────────────────────────────────────
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -296,11 +296,12 @@ func printBanner(cfg *config.Config, ver string, tls bool) {
 
 	banner := fmt.Sprintf(`
 
-     ___                  ____              _
-    / _ \__      ___ __  / ___|___  _ __ __| |
-   | | | \ \ /\ / / '_ \| |   / _ \| '__/ _`+"`"+` |
-   | |_| |\ V  V /| | | | |__| (_) | | | (_| |
-    \___/  \_/\_/ |_| |_|\____\___/|_|  \__,_|
+    ____        _
+   |  _ \ _   _| | ___
+   | |_) | | | | |/ _ \
+   |  _ <| |_| | | (_) |
+   |_| \_\\__, |_|\___/
+          |___/
 
    ─────────────────────────────────────────────
     Server   %s

@@ -13,6 +13,7 @@ import { createIcon } from "@lib/icons";
 import { loadPref } from "@components/settings/helpers";
 import type { Message } from "@stores/messages.store";
 import type { MessageListOptions } from "../MessageList";
+import { openUserProfileById } from "@components/UserProfileOverlay";
 
 /** Cached value of the developerMode preference. Invalidated on pref change. */
 let developerModeEnabled = loadPref<boolean>("developerMode", false);
@@ -147,8 +148,10 @@ export function renderMessage(
     return renderSystemMessage(msg);
   }
 
+  const isPending = msg.localState === "sending";
+
   const el = createElement("div", {
-    class: isGrouped ? "message grouped" : "message",
+    class: `${isGrouped ? "message grouped" : "message"}${isPending ? " pending" : ""}`,
     "data-testid": `message-${msg.id}`,
   });
 
@@ -158,6 +161,9 @@ export function renderMessage(
     class: "msg-avatar",
     style: `background: ${roleColorVar(role)}`,
   }, initial);
+  avatar.addEventListener("click", () => {
+    openUserProfileById(msg.user.id);
+  }, { signal });
   el.appendChild(avatar);
 
   if (isGrouped) {
@@ -177,7 +183,13 @@ export function renderMessage(
     class: "msg-author",
     style: `color: ${roleColorVar(role)}`,
   }, msg.user.username);
+  author.addEventListener("click", () => {
+    openUserProfileById(msg.user.id);
+  }, { signal });
   const time = createElement("span", { class: "msg-time", title: formatFullDate(msg.timestamp) }, formatMessageTimestamp(msg.timestamp));
+  if (isPending) {
+    setText(time, "Отправка...");
+  }
   appendChildren(header, author, time);
   el.appendChild(header);
 
@@ -208,7 +220,7 @@ export function renderMessage(
     }
   }
 
-  if (!msg.deleted) {
+  if (!msg.deleted && !isPending) {
     const actionsBar = createElement("div", { class: "msg-actions-bar" });
 
     const reactBtn = createElement("button", {

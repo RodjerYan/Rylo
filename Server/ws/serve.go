@@ -13,6 +13,7 @@ import (
 
 	"github.com/rylo/server/auth"
 	"github.com/rylo/server/db"
+	"github.com/rylo/server/replication"
 )
 
 const authDeadline = 10 * time.Second
@@ -45,6 +46,7 @@ func ServeWS(hub *Hub, database *db.DB, allowedOrigins []string) http.HandlerFun
 
 		c := newClient(hub, conn, user, tokenHash, r.Context())
 		c.remoteAddr = r.RemoteAddr
+		c.connectedHost = normalizeConnectedHost(r.Host)
 
 		// Look up role name for protocol-compliant payloads and cache on client.
 		roleName := "member"
@@ -90,10 +92,21 @@ func ServeWS(hub *Hub, database *db.DB, allowedOrigins []string) http.HandlerFun
 				hub.registerNow(c)
 
 				// Update presence but skip member_join — user was already known.
-				if updateErr := database.UpdateUserStatus(user.ID, "online"); updateErr != nil {
+				nowOnline := time.Now().UTC().Format(time.RFC3339)
+				if updateErr := database.UpdateUserStatusAt(user.ID, "online", nowOnline); updateErr != nil {
 					slog.Warn("ws UpdateUserStatus", "err", updateErr)
 				}
-				hub.BroadcastToAll(buildPresenceMsg(user.ID, "online"))
+				hub.BroadcastToAll(buildPresenceMsg(user.ID, "online", &nowOnline))
+				if hub.replicator != nil && hub.replicator.Enabled() {
+					if err := hub.replicator.MirrorPresence(ctx, replication.PresencePayload{
+						Username:     user.Username,
+						Status:       "online",
+						LastSeen:     nowOnline,
+						SourceServer: c.connectedHost,
+					}); err != nil {
+						slog.Warn("ws mirror online presence failed", "user_id", user.ID, "error", err)
+					}
+				}
 
 				// Start pumps.
 				startPumps()
@@ -124,19 +137,39 @@ func ServeWS(hub *Hub, database *db.DB, allowedOrigins []string) http.HandlerFun
 		}
 		hub.registerNow(c)
 
-		if updateErr := database.UpdateUserStatus(user.ID, "online"); updateErr != nil {
+		nowOnline := time.Now().UTC().Format(time.RFC3339)
+		if updateErr := database.UpdateUserStatusAt(user.ID, "online", nowOnline); updateErr != nil {
 			slog.Warn("ws UpdateUserStatus", "err", updateErr)
 		}
 
 		slog.Info("ws broadcasting member_join and presence", "user_id", user.ID, "username", user.Username)
 		hub.BroadcastToAll(buildMemberJoin(user, roleName))
-		hub.BroadcastToAll(buildPresenceMsg(user.ID, "online"))
+		hub.BroadcastToAll(buildPresenceMsg(user.ID, "online", &nowOnline))
+		if hub.replicator != nil && hub.replicator.Enabled() {
+			if err := hub.replicator.MirrorPresence(ctx, replication.PresencePayload{
+				Username:     user.Username,
+				Status:       "online",
+				LastSeen:     nowOnline,
+				SourceServer: c.connectedHost,
+			}); err != nil {
+				slog.Warn("ws mirror online presence failed", "user_id", user.ID, "error", err)
+			}
+		}
 
 		// writePump runs in background; readPump blocks.
 		// When readPump returns (disconnect), close the send channel first
 		// so writePump drains any remaining messages, then cancel its context.
 		startPumps()
 	}
+}
+
+func normalizeConnectedHost(host string) string {
+	normalized := strings.TrimSpace(strings.ToLower(host))
+	normalized = strings.TrimPrefix(normalized, "https://")
+	normalized = strings.TrimPrefix(normalized, "http://")
+	normalized = strings.TrimPrefix(normalized, "wss://")
+	normalized = strings.TrimPrefix(normalized, "ws://")
+	return strings.TrimSuffix(normalized, "/")
 }
 
 // writePump drains the client's send channel and writes to the WebSocket.
@@ -200,8 +233,19 @@ func readPump(ctx context.Context, conn *websocket.Conn, hub *Hub, c *Client) {
 			slog.Info("websocket disconnected", attrs...)
 
 			if !replaced {
-				_ = hub.db.UpdateUserStatus(c.userID, "offline")
-				hub.BroadcastToAll(buildPresenceMsg(c.userID, "offline"))
+				nowOffline := time.Now().UTC().Format(time.RFC3339)
+				_ = hub.db.UpdateUserStatusAt(c.userID, "offline", nowOffline)
+				hub.BroadcastToAll(buildPresenceMsg(c.userID, "offline", &nowOffline))
+				if hub.replicator != nil && hub.replicator.Enabled() && c.user != nil {
+					if err := hub.replicator.MirrorPresence(context.Background(), replication.PresencePayload{
+						Username:     c.user.Username,
+						Status:       "offline",
+						LastSeen:     nowOffline,
+						SourceServer: c.connectedHost,
+					}); err != nil {
+						slog.Warn("ws mirror offline presence failed", "user_id", c.userID, "error", err)
+					}
+				}
 			}
 		}
 	}()

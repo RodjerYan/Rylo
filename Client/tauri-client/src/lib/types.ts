@@ -58,6 +58,9 @@ export interface MessageUser {
 /** User object with role, used in auth_ok and member_join. */
 export interface UserWithRole extends MessageUser {
   readonly role: string;
+  readonly profile_id?: number;
+  readonly banner?: string | null;
+  readonly status?: UserStatus;
   readonly totp_enabled?: boolean;
 }
 
@@ -101,6 +104,7 @@ export interface ReadyMember {
   readonly avatar: string | null;
   readonly role: string;
   readonly status: UserStatus;
+  readonly last_seen?: string | null;
 }
 
 /** Voice state object in the ready payload. */
@@ -186,6 +190,7 @@ export interface ChatMessagePayload {
   readonly reply_to: number | null;
   readonly attachments: readonly Attachment[];
   readonly timestamp: string;
+  readonly source_server?: string;
 }
 
 export interface ChatSendOkPayload {
@@ -222,6 +227,7 @@ export interface TypingPayload {
 export interface PresencePayload {
   readonly user_id: number;
   readonly status: UserStatus;
+  readonly last_seen?: string;
 }
 
 export interface ChannelCreatePayload {
@@ -310,6 +316,7 @@ export interface DmRecipient {
   readonly username: string;
   readonly avatar: string;
   readonly status: string;
+  readonly last_seen?: string | null;
 }
 
 /** DM channel object in ready payload and dm_channel_open event. */
@@ -532,10 +539,14 @@ export interface MessagesResponse {
 /** Member object from REST API. */
 export interface MemberResponse {
   readonly id: number;
+  readonly profile_id?: number;
   readonly username: string;
   readonly avatar: string | null;
-  readonly role: string;
-  readonly status: UserStatus;
+  readonly banner?: string | null;
+  readonly role?: string;
+  readonly role_id?: number;
+  readonly status?: UserStatus;
+  readonly last_seen?: string | null;
 }
 
 /** Search result item. */
@@ -582,10 +593,22 @@ export interface SoundResponse {
 export interface InviteResponse {
   readonly id: number;
   readonly code: string;
-  readonly url: string;
+  readonly url?: string;
   readonly max_uses: number | null;
+  readonly uses?: number;
   readonly use_count?: number;
   readonly expires_at: string | null;
+  readonly revoked?: boolean;
+  readonly status?: "active" | "used" | "revoked" | "expired";
+  readonly created_at?: string;
+  readonly created_by?: {
+    readonly id: number;
+    readonly username: string;
+  } | null;
+  readonly redeemed_by?: {
+    readonly id: number;
+    readonly username: string;
+  } | null;
 }
 
 /** Single session object from GET /api/users/me/sessions. */
@@ -605,6 +628,23 @@ export interface UploadResponse {
   readonly size: number;
   readonly mime: string;
   readonly url: string;
+}
+
+/** Default avatar item from Yandex Disk catalog. */
+export interface DefaultAvatarItemResponse {
+  readonly name: string;
+  readonly preview_url: string;
+}
+
+/** Default avatar category (folder name) from Yandex Disk catalog. */
+export interface DefaultAvatarCategoryResponse {
+  readonly name: string;
+  readonly avatars: readonly DefaultAvatarItemResponse[];
+}
+
+/** GET /api/v1/profile/default-avatars response. */
+export interface DefaultAvatarCatalogResponse {
+  readonly categories: readonly DefaultAvatarCategoryResponse[];
 }
 
 /** GET /api/v1/dms response. */

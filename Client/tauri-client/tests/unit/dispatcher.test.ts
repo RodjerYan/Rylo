@@ -90,6 +90,7 @@ describe("WS Dispatcher", () => {
     messagesStore.setState(() => ({
       messagesByChannel: new Map(),
       pendingSends: new Map(),
+      pendingMessages: new Map(),
       loadedChannels: new Set(),
       hasMore: new Map(),
     }));

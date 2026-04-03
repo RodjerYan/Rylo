@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -38,7 +39,7 @@ func (d *DB) CreateUserWithInvite(username, passwordHash string, roleID int, inv
 	}()
 
 	result, err := tx.Exec(
-		`UPDATE invites SET use_count = use_count + 1
+		`UPDATE invites SET use_count = use_count + 1, revoked = 1
 		 WHERE code = ? AND revoked = 0
 		 AND (max_uses IS NULL OR use_count < max_uses)
 		 AND (expires_at IS NULL OR strftime('%s', expires_at) > strftime('%s', 'now'))`,
@@ -66,6 +67,14 @@ func (d *DB) CreateUserWithInvite(username, passwordHash string, roleID int, inv
 	if err != nil {
 		return 0, fmt.Errorf("CreateUserWithInvite last insert id: %w", err)
 	}
+	if _, err := tx.Exec(
+		`UPDATE invites
+		 SET redeemed_by = COALESCE(redeemed_by, ?)
+		 WHERE code = ?`,
+		uid, inviteCode,
+	); err != nil {
+		return 0, fmt.Errorf("CreateUserWithInvite set redeemed_by: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("CreateUserWithInvite commit: %w", err)
 	}
@@ -77,7 +86,7 @@ func (d *DB) CreateUserWithInvite(username, passwordHash string, roleID int, inv
 // or nil if not found.
 func (d *DB) GetUserByUsername(username string) (*User, error) {
 	row := d.sqlDB.QueryRow(
-		`SELECT id, username, password, avatar, role_id, totp_secret, status,
+		`SELECT id, username, password, avatar, banner, role_id, totp_secret, status,
 		        created_at, last_seen, banned, ban_reason, ban_expires
 		 FROM users WHERE username = ? COLLATE NOCASE`,
 		username,
@@ -88,7 +97,7 @@ func (d *DB) GetUserByUsername(username string) (*User, error) {
 // GetUserByID returns the user with the given ID, or nil if not found.
 func (d *DB) GetUserByID(id int64) (*User, error) {
 	row := d.sqlDB.QueryRow(
-		`SELECT id, username, password, avatar, role_id, totp_secret, status,
+		`SELECT id, username, password, avatar, banner, role_id, totp_secret, status,
 		        created_at, last_seen, banned, ban_reason, ban_expires
 		 FROM users WHERE id = ?`,
 		id,
@@ -102,7 +111,7 @@ func scanUser(row *sql.Row) (*User, error) {
 	u := &User{}
 	var banned int
 	err := row.Scan(
-		&u.ID, &u.Username, &u.PasswordHash, &u.Avatar, &u.RoleID,
+		&u.ID, &u.Username, &u.PasswordHash, &u.Avatar, &u.Banner, &u.RoleID,
 		&u.TOTPSecret, &u.Status, &u.CreatedAt, &u.LastSeen,
 		&banned, &u.BanReason, &u.BanExpires,
 	)
@@ -128,11 +137,53 @@ func (d *DB) UpdateUserStatus(id int64, status string) error {
 	return nil
 }
 
+// UpdateUserStatusAt sets the status and an explicit last_seen timestamp.
+func (d *DB) UpdateUserStatusAt(id int64, status string, lastSeen string) error {
+	_, err := d.sqlDB.Exec(
+		`UPDATE users SET status = ?, last_seen = ? WHERE id = ?`,
+		status, lastSeen, id,
+	)
+	if err != nil {
+		return fmt.Errorf("UpdateUserStatusAt: %w", err)
+	}
+	return nil
+}
+
 // UpdateUserTOTPSecret sets or clears the TOTP secret for a user.
 func (d *DB) UpdateUserTOTPSecret(id int64, secret *string) error {
 	_, err := d.sqlDB.Exec(`UPDATE users SET totp_secret = ? WHERE id = ?`, secret, id)
 	if err != nil {
 		return fmt.Errorf("UpdateUserTOTPSecret: %w", err)
+	}
+	return nil
+}
+
+// UpdateUserProfile updates one or more user profile fields.
+// Nil fields are ignored; non-nil fields are written as-is.
+func (d *DB) UpdateUserProfile(id int64, username, avatar, banner *string) error {
+	parts := make([]string, 0, 3)
+	args := make([]any, 0, 4)
+
+	if username != nil {
+		parts = append(parts, "username = ?")
+		args = append(args, *username)
+	}
+	if avatar != nil {
+		parts = append(parts, "avatar = ?")
+		args = append(args, *avatar)
+	}
+	if banner != nil {
+		parts = append(parts, "banner = ?")
+		args = append(args, *banner)
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+
+	query := "UPDATE users SET " + strings.Join(parts, ", ") + " WHERE id = ?"
+	args = append(args, id)
+	if _, err := d.sqlDB.Exec(query, args...); err != nil {
+		return fmt.Errorf("UpdateUserProfile: %w", err)
 	}
 	return nil
 }
@@ -320,14 +371,22 @@ func (d *DB) CreateInvite(createdBy int64, maxUses int, expiresAt *time.Time) (s
 // GetInvite returns the invite for the given code, or nil if not found.
 func (d *DB) GetInvite(code string) (*Invite, error) {
 	row := d.sqlDB.QueryRow(
-		`SELECT id, code, created_by, max_uses, use_count, expires_at, revoked, created_at
-		 FROM invites WHERE code = ?`,
+		`SELECT i.id, i.code, i.created_by,
+		        cu.username AS created_by_username,
+		        i.redeemed_by,
+		        ru.username AS redeemed_by_username,
+		        i.max_uses, i.use_count, i.expires_at, i.revoked, i.created_at
+		 FROM invites i
+		 LEFT JOIN users cu ON cu.id = i.created_by
+		 LEFT JOIN users ru ON ru.id = i.redeemed_by
+		 WHERE i.code = ?`,
 		code,
 	)
 	inv := &Invite{}
 	var revoked int
 	err := row.Scan(
-		&inv.ID, &inv.Code, &inv.CreatedBy, &inv.MaxUses,
+		&inv.ID, &inv.Code, &inv.CreatedBy, &inv.CreatedByUsername,
+		&inv.RedeemedBy, &inv.RedeemedByUsername, &inv.MaxUses,
 		&inv.Uses, &inv.ExpiresAt, &revoked, &inv.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -382,6 +441,24 @@ func (d *DB) RevokeInvite(code string) error {
 	return nil
 }
 
+// ConsumeInviteAndRevokeBestEffort updates local invite counters for a
+// remotely consumed invite. It is intentionally best-effort: rows=0 is not an
+// error so registration can succeed on nodes that don't have the invite row.
+func (d *DB) ConsumeInviteAndRevokeBestEffort(code string, redeemedBy int64) error {
+	_, err := d.sqlDB.Exec(
+		`UPDATE invites
+		 SET use_count = use_count + 1,
+		     revoked = 1,
+		     redeemed_by = COALESCE(redeemed_by, ?)
+		 WHERE code = ?`,
+		redeemedBy, code,
+	)
+	if err != nil {
+		return fmt.Errorf("ConsumeInviteAndRevokeBestEffort: %w", err)
+	}
+	return nil
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // MemberSummary is a lightweight user shape for the ready payload.
@@ -391,12 +468,13 @@ type MemberSummary struct {
 	Avatar   *string `json:"avatar"`
 	Status   string  `json:"status"`
 	Role     string  `json:"role"`
+	LastSeen *string `json:"last_seen,omitempty"`
 }
 
 // ListMembers returns all non-banned users as lightweight summaries.
 func (d *DB) ListMembers() ([]MemberSummary, error) {
 	rows, err := d.sqlDB.Query(
-		`SELECT u.id, u.username, u.avatar, u.status, LOWER(r.name)
+		`SELECT u.id, u.username, u.avatar, u.status, LOWER(r.name), u.last_seen
 		 FROM users u
 		 JOIN roles r ON u.role_id = r.id
 		 WHERE u.banned = 0
@@ -410,7 +488,7 @@ func (d *DB) ListMembers() ([]MemberSummary, error) {
 	var members []MemberSummary
 	for rows.Next() {
 		var m MemberSummary
-		if err := rows.Scan(&m.ID, &m.Username, &m.Avatar, &m.Status, &m.Role); err != nil {
+		if err := rows.Scan(&m.ID, &m.Username, &m.Avatar, &m.Status, &m.Role, &m.LastSeen); err != nil {
 			return nil, fmt.Errorf("ListMembers scan: %w", err)
 		}
 		members = append(members, m)

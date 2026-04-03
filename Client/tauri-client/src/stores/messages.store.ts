@@ -15,6 +15,7 @@ import type {
   ReactionSummary,
   MessageResponse,
 } from "@lib/types";
+import { authStore } from "@stores/auth.store";
 
 // -----------------------------------------------------------------------------
 // Types
@@ -32,6 +33,21 @@ export interface Message {
   readonly editedAt: string | null;
   readonly deleted: boolean;
   readonly timestamp: string;
+  readonly localState?: "sending";
+}
+
+interface PendingSend {
+  readonly correlationId: string;
+  readonly channelId: number;
+  readonly content: string;
+  readonly replyTo: number | null;
+  readonly attachments: readonly string[];
+  readonly createdAt: string;
+  readonly localId: number;
+  readonly user: MessageUser;
+  readonly acknowledged: boolean;
+  readonly serverMessageId: number | null;
+  readonly serverTimestamp: string | null;
 }
 
 export interface MessagesState {
@@ -39,6 +55,8 @@ export interface MessagesState {
   readonly messagesByChannel: ReadonlyMap<number, readonly Message[]>;
   /** Pending send confirmations: correlationId -> channelId */
   readonly pendingSends: ReadonlyMap<string, number>;
+  /** Pending outbound messages rendered optimistically in chat */
+  readonly pendingMessages: ReadonlyMap<string, PendingSend>;
   /** Whether we've loaded initial messages for a channel */
   readonly loadedChannels: ReadonlySet<number>;
   /** Whether more messages exist above for a channel */
@@ -81,8 +99,80 @@ function messageResponseToMessage(response: MessageResponse): Message {
   };
 }
 
+function attachmentsMatch(
+  sentAttachmentIDs: readonly string[],
+  incoming: readonly Attachment[],
+): boolean {
+  if (sentAttachmentIDs.length !== incoming.length) {
+    return false;
+  }
+  for (let i = 0; i < sentAttachmentIDs.length; i++) {
+    if (sentAttachmentIDs[i] !== incoming[i]?.id) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function findMatchingPendingSend(
+  pendingSends: ReadonlyMap<string, PendingSend>,
+  incoming: Message,
+): string | null {
+  let matchedCorrelationId: string | null = null;
+  let matchedLocalId = Number.NEGATIVE_INFINITY;
+  for (const [correlationId, pending] of pendingSends) {
+    if (pending.channelId !== incoming.channelId) {
+      continue;
+    }
+    if (pending.user.id !== incoming.user.id) {
+      continue;
+    }
+    if (pending.content !== incoming.content) {
+      continue;
+    }
+    if (pending.replyTo !== incoming.replyTo) {
+      continue;
+    }
+    if (!attachmentsMatch(pending.attachments, incoming.attachments)) {
+      continue;
+    }
+    if (pending.localId > matchedLocalId) {
+      matchedLocalId = pending.localId;
+      matchedCorrelationId = correlationId;
+    }
+  }
+  return matchedCorrelationId;
+}
+
+function pendingToMessage(pending: PendingSend): Message {
+  return {
+    id: pending.localId,
+    channelId: pending.channelId,
+    user: pending.user,
+    content: pending.content,
+    replyTo: pending.replyTo,
+    attachments: [],
+    reactions: [],
+    pinned: false,
+    editedAt: null,
+    deleted: false,
+    timestamp: pending.serverTimestamp ?? pending.createdAt,
+    localState: "sending",
+  };
+}
+
+function messageSort(a: Message, b: Message): number {
+  const aTs = Date.parse(a.timestamp);
+  const bTs = Date.parse(b.timestamp);
+  if (Number.isFinite(aTs) && Number.isFinite(bTs) && aTs !== bTs) {
+    return aTs - bTs;
+  }
+  return a.id - b.id;
+}
+
 /** Maximum messages retained per channel. Oldest messages are evicted when exceeded. */
 const MAX_MESSAGES_PER_CHANNEL = 500;
+let nextPendingLocalId = -1;
 
 // -----------------------------------------------------------------------------
 // Initial state
@@ -91,6 +181,7 @@ const MAX_MESSAGES_PER_CHANNEL = 500;
 const INITIAL_STATE: MessagesState = {
   messagesByChannel: new Map(),
   pendingSends: new Map(),
+  pendingMessages: new Map(),
   loadedChannels: new Set(),
   hasMore: new Map(),
 };
@@ -108,6 +199,7 @@ export const messagesStore = createStore<MessagesState>(INITIAL_STATE);
 /** Append a new message from a chat_message WS event. */
 export function addMessage(payload: ChatMessagePayload): void {
   const message = chatPayloadToMessage(payload);
+  const currentUserId = authStore.getState().user?.id ?? 0;
   messagesStore.setState((prev) => {
     const channelId = message.channelId;
     const existing = prev.messagesByChannel.get(channelId) ?? [];
@@ -123,7 +215,21 @@ export function addMessage(payload: ChatMessagePayload): void {
     if (existing.length + 1 > MAX_MESSAGES_PER_CHANNEL) {
       updatedHasMore.set(channelId, true);
     }
-    return { ...prev, messagesByChannel: updated, hasMore: updatedHasMore };
+    let updatedPendingMessages = prev.pendingMessages;
+    if (currentUserId !== 0 && message.user.id === currentUserId) {
+      const matchedCorrelationId = findMatchingPendingSend(prev.pendingMessages, message);
+      if (matchedCorrelationId !== null) {
+        const nextPendingMessages = new Map(prev.pendingMessages);
+        nextPendingMessages.delete(matchedCorrelationId);
+        updatedPendingMessages = nextPendingMessages;
+      }
+    }
+    return {
+      ...prev,
+      messagesByChannel: updated,
+      hasMore: updatedHasMore,
+      pendingMessages: updatedPendingMessages,
+    };
   });
 }
 
@@ -246,24 +352,74 @@ export function setMessagePinned(
 export function addPendingSend(
   correlationId: string,
   channelId: number,
+  content = "",
+  replyTo: number | null = null,
+  attachments: readonly string[] = [],
 ): void {
+  const me = authStore.getState().user;
+  const pendingUser: MessageUser = {
+    id: me?.id ?? 0,
+    username: me?.username ?? "Вы",
+    avatar: me?.avatar ?? null,
+  };
+  const pendingSend: PendingSend = {
+    correlationId,
+    channelId,
+    content,
+    replyTo,
+    attachments: [...attachments],
+    createdAt: new Date().toISOString(),
+    localId: nextPendingLocalId,
+    user: pendingUser,
+    acknowledged: false,
+    serverMessageId: null,
+    serverTimestamp: null,
+  };
+  nextPendingLocalId -= 1;
   messagesStore.setState((prev) => {
-    const updated = new Map(prev.pendingSends);
-    updated.set(correlationId, channelId);
-    return { ...prev, pendingSends: updated };
+    const updatedPending = new Map(prev.pendingSends);
+    updatedPending.set(correlationId, channelId);
+    const updatedPendingMessages = new Map(prev.pendingMessages);
+    updatedPendingMessages.set(correlationId, pendingSend);
+    return {
+      ...prev,
+      pendingSends: updatedPending,
+      pendingMessages: updatedPendingMessages,
+    };
   });
 }
 
-/** Confirm a pending send — remove from pending map. */
+/** Confirm a pending send — keep message visible until chat_message arrives. */
 export function confirmSend(
   correlationId: string,
-  _messageId: number,
-  _timestamp: string,
+  messageId: number,
+  timestamp: string,
 ): void {
   messagesStore.setState((prev) => {
-    const updated = new Map(prev.pendingSends);
-    updated.delete(correlationId);
-    return { ...prev, pendingSends: updated };
+    const updatedPendingSends = new Map(prev.pendingSends);
+    updatedPendingSends.delete(correlationId);
+    const pending = prev.pendingMessages.get(correlationId);
+    if (pending === undefined) {
+      if (updatedPendingSends.size === prev.pendingSends.size) {
+        return prev;
+      }
+      return {
+        ...prev,
+        pendingSends: updatedPendingSends,
+      };
+    }
+    const updatedPendingMessages = new Map(prev.pendingMessages);
+    updatedPendingMessages.set(correlationId, {
+      ...pending,
+      acknowledged: true,
+      serverMessageId: messageId,
+      serverTimestamp: timestamp,
+    });
+    return {
+      ...prev,
+      pendingSends: updatedPendingSends,
+      pendingMessages: updatedPendingMessages,
+    };
   });
 }
 
@@ -278,12 +434,22 @@ export function clearChannelMessages(channelId: number): void {
 
     const updatedHasMore = new Map(prev.hasMore);
     updatedHasMore.delete(channelId);
+    const updatedPendingSends = new Map(prev.pendingSends);
+    const updatedPendingMessages = new Map(prev.pendingMessages);
+    for (const [correlationId, pendingChannelID] of prev.pendingSends) {
+      if (pendingChannelID === channelId) {
+        updatedPendingSends.delete(correlationId);
+        updatedPendingMessages.delete(correlationId);
+      }
+    }
 
     return {
       ...prev,
       messagesByChannel: updatedMessages,
       loadedChannels: updatedLoaded,
       hasMore: updatedHasMore,
+      pendingSends: updatedPendingSends,
+      pendingMessages: updatedPendingMessages,
     };
   });
 }
@@ -343,7 +509,21 @@ export function updateReaction(
 /** Get messages for a channel, or empty array if none loaded. */
 export function getChannelMessages(channelId: number): readonly Message[] {
   return messagesStore.select(
-    (s) => s.messagesByChannel.get(channelId) ?? [],
+    (s) => {
+      const base = s.messagesByChannel.get(channelId) ?? [];
+      const pending: Message[] = [];
+      for (const pendingSend of s.pendingMessages.values()) {
+        if (pendingSend.channelId === channelId) {
+          pending.push(pendingToMessage(pendingSend));
+        }
+      }
+      if (pending.length === 0) {
+        return base;
+      }
+      const merged = [...base, ...pending];
+      merged.sort(messageSort);
+      return merged;
+    },
   );
 }
 

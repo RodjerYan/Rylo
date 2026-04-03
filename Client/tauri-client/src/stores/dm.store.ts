@@ -10,6 +10,7 @@ export interface DmUser {
   readonly username: string;
   readonly avatar: string;
   readonly status: string;
+  readonly lastSeen?: string | null;
 }
 
 export interface DmChannel {
@@ -97,6 +98,28 @@ export function clearDmUnread(channelId: number): void {
   dmStore.setState((prev) => ({
     channels: prev.channels.map((c) =>
       c.channelId === channelId ? { ...c, unreadCount: 0 } : c,
+    ),
+  }));
+}
+
+/** Update recipient presence in all DM channels for this user. */
+export function updateDmRecipientPresence(
+  userId: number,
+  status: string,
+  lastSeen?: string,
+): void {
+  dmStore.setState((prev) => ({
+    channels: prev.channels.map((c) =>
+      c.recipient.id === userId
+        ? {
+            ...c,
+            recipient: {
+              ...c.recipient,
+              status,
+              lastSeen: lastSeen ?? c.recipient.lastSeen ?? null,
+            },
+          }
+        : c,
     ),
   }));
 }

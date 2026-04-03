@@ -16,6 +16,7 @@ export interface Member {
   readonly avatar: string | null;
   readonly role: string;
   readonly status: UserStatus;
+  readonly lastSeen?: string | null;
 }
 
 export interface MembersState {
@@ -49,6 +50,7 @@ export function setMembers(members: readonly ReadyMember[]): void {
       avatar: m.avatar,
       role: m.role,
       status: m.status,
+      lastSeen: m.last_seen ?? null,
     });
   }
   // Clear all outstanding typing timers
@@ -72,6 +74,7 @@ export function addMember(payload: MemberJoinPayload): void {
       avatar: payload.user.avatar,
       role: payload.user.role,
       status: "online" as UserStatus,
+      lastSeen: null,
     });
     return { ...prev, members: next };
   });
@@ -98,12 +101,12 @@ export function updateMemberRole(userId: number, role: string): void {
 }
 
 /** Update a member's presence status. */
-export function updatePresence(userId: number, status: UserStatus): void {
+export function updatePresence(userId: number, status: UserStatus, lastSeen?: string): void {
   membersStore.setState((prev) => {
     const existing = prev.members.get(userId);
     if (!existing) return prev;
     const next = new Map(prev.members);
-    next.set(userId, { ...existing, status });
+    next.set(userId, { ...existing, status, lastSeen: lastSeen ?? existing.lastSeen ?? null });
     return { ...prev, members: next };
   });
 }

@@ -180,6 +180,7 @@ function renderPage(pageId: "connect" | "main"): void {
   function wirePostAuth(host: string, token: string, username: string, password?: string): void {
     log.info("Post-auth wiring", { host, username });
     api.setConfig({ token });
+    sessionStorage.setItem("rylo:current-host", host);
     // Store token in authStore so the dispatcher's auth_ok handler has it
     authStore.setState((prev) => ({ ...prev, token }));
     lastConnectHost = host;
@@ -366,7 +367,38 @@ function renderPage(pageId: "connect" | "main"): void {
           quickSwitchTarget,
           targetProfile?.username ?? undefined,
         );
-        return; // Skip auto-login when switching servers
+        try {
+          const cred = await loadCredential(quickSwitchTarget);
+          if (cred?.username && cred?.token && !autoLoginCancelled) {
+            connectPage.showAutoConnecting(targetProfile?.name ?? quickSwitchTarget);
+            wirePostAuth(quickSwitchTarget, cred.token, cred.username, cred.password);
+            return;
+          }
+
+          if (cred?.username && cred?.password && !autoLoginCancelled) {
+            connectPage.showAutoConnecting(targetProfile?.name ?? quickSwitchTarget);
+            api.setConfig({ host: quickSwitchTarget });
+            const result = await api.login(cred.username, cred.password);
+
+            if (autoLoginCancelled) return;
+            if (result.requires_2fa) {
+              pendingTotpHost = quickSwitchTarget;
+              pendingTotpPartialToken = result.partial_token ?? "";
+              pendingTotpUsername = cred.username;
+              connectPage.showTotp();
+              return;
+            }
+            if (result.token) {
+              ensureProfileExists(quickSwitchTarget, cred.username, true);
+              wirePostAuth(quickSwitchTarget, result.token, cred.username, cred.password);
+              return;
+            }
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Auto-switch login failed";
+          log.warn("Auto-switch login failed", { host: quickSwitchTarget, error: message });
+        }
+        return;
       }
 
       // Auto-login: if a profile has autoConnect enabled, try to connect automatically.
@@ -423,6 +455,12 @@ authStore.subscribeSelector(
   (s) => s.isAuthenticated,
   (isAuthenticated) => {
     if (!isAuthenticated && router.getCurrentPage() === "main") {
+      const logoutReason = sessionStorage.getItem("rylo:logout-reason");
+      const preserveCredential = logoutReason === "switch";
+      if (logoutReason !== null) {
+        sessionStorage.removeItem("rylo:logout-reason");
+      }
+
       // Leave voice channel before disconnecting so other clients see it immediately
       const voice = voiceStore.getState();
       if (voice.currentChannelId !== null) {
@@ -435,9 +473,10 @@ authStore.subscribeSelector(
       ws.disconnect();
       lastConnectToken = "";
       lastConnectHost = "";
-      // Clear stored credential on logout
+      sessionStorage.removeItem("rylo:current-host");
+      // Clear stored credential on normal logout (preserve on server switch)
       const host = api.getConfig().host;
-      if (host) {
+      if (host && !preserveCredential) {
         void deleteCredential(host);
       }
       router.navigate("connect");

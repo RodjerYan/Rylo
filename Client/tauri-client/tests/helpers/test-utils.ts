@@ -44,6 +44,7 @@ const MEMBERS_INITIAL: MembersState = {
 const MESSAGES_INITIAL: MessagesState = {
   messagesByChannel: new Map(),
   pendingSends: new Map(),
+  pendingMessages: new Map(),
   loadedChannels: new Set(),
   hasMore: new Map(),
 };
@@ -94,6 +95,7 @@ export function resetAllStores(): void {
     ...MESSAGES_INITIAL,
     messagesByChannel: new Map(),
     pendingSends: new Map(),
+    pendingMessages: new Map(),
     loadedChannels: new Set(),
     hasMore: new Map(),
   }));

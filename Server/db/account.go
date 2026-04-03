@@ -84,6 +84,7 @@ func (d *DB) DeleteAccount(ctx context.Context, userID int64) error {
 		 SET username    = ?,
 		     password    = '',
 		     avatar      = NULL,
+		     banner      = NULL,
 		     totp_secret = NULL,
 		     status      = 'offline',
 		     banned      = 1,

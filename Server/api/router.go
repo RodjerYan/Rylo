@@ -70,7 +70,7 @@ func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.Ri
 	MountAuthRoutes(r, database, limiter, cfg.Server.TrustedProxies, replicator, cfg.Registration)
 
 	// Invite management routes (require MANAGE_INVITES permission).
-	MountInviteRoutes(r, database)
+	MountInviteRoutes(r, database, replicator)
 
 	// Channel and message REST routes.
 	MountChannelRoutes(r, database, limiter, cfg.Server.TrustedProxies)
@@ -89,6 +89,10 @@ func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.Ri
 	// WebSocket hub — WS does its own in-band auth, so no AuthMiddleware here.
 	hub := ws.NewHub(database, limiter)
 	hub.SetReplicator(replicator)
+	if replicator != nil {
+		replicator.SetImportedMessageHook(hub.HandleReplicatedMessage)
+		replicator.SetImportedPresenceHook(hub.HandleReplicatedPresence)
+	}
 	getOnlineUsers = func() int { return hub.ClientCount() }
 
 	// Create LiveKit client if voice config is present; voice is disabled on failure.
