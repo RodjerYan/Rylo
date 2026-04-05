@@ -313,6 +313,7 @@ export function createMainPage(options: MainPageOptions): MountableComponent {
         if (userId !== 0) {
           updatePresence(userId, status);
         }
+        updateUser({ status });
         if (limiters.presence.tryConsume()) {
           ws.send({ type: "presence_update", payload: { status } });
         }

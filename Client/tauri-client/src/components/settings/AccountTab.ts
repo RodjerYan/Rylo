@@ -8,7 +8,7 @@ import { createElement, appendChildren, setText, clearChildren } from "@lib/dom"
 import { createIcon } from "@lib/icons";
 import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
 import type { DefaultAvatarCategoryResponse, UserStatus } from "@lib/types";
-import { authStore } from "@stores/auth.store";
+import { authStore, updateUser } from "@stores/auth.store";
 import type { SettingsOverlayOptions } from "../SettingsOverlay";
 import { loadPref, savePref } from "./helpers";
 
@@ -34,6 +34,32 @@ interface ProfileCardModel {
   readonly profileId: number;
   readonly avatar: string | null;
   readonly banner: string | null;
+}
+
+const PROFILE_MEDIA_MAX_SOURCE_SIZE_BYTES = 20 * 1024 * 1024;
+const PROFILE_MEDIA_ACCEPT_ATTR = "image/jpeg,image/png,image/webp,image/gif,image/bmp,image/avif,.jpg,.jpeg,.png,.webp,.gif,.bmp,.avif";
+const PROFILE_MEDIA_ALLOWED_EXTENSIONS = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+  ".gif",
+  ".bmp",
+  ".avif",
+]);
+
+function isSupportedProfileMediaFile(file: File): boolean {
+  const normalizedType = file.type.trim().toLowerCase();
+  if (normalizedType.startsWith("image/")) {
+    return true;
+  }
+  const lastDot = file.name.lastIndexOf(".");
+  const extension = lastDot >= 0 ? file.name.slice(lastDot).toLowerCase() : "";
+  return PROFILE_MEDIA_ALLOWED_EXTENSIONS.has(extension);
+}
+
+function formatProfileMediaLimitLabel(): string {
+  return `${Math.round(PROFILE_MEDIA_MAX_SOURCE_SIZE_BYTES / (1024 * 1024))} МБ`;
 }
 
 // ---------------------------------------------------------------------------
@@ -867,11 +893,12 @@ export function buildAccountTab(
     profileId?: number;
   }): void {
     const latestUser = authStore.getState().user;
-    const latestName = latestUser?.username?.trim() !== ""
-      ? latestUser?.username ?? username
-      : (fallback?.username ?? username);
-    const latestAvatar = latestUser?.avatar ?? fallback?.avatar ?? avatar;
-    const latestBanner = latestUser?.banner ?? fallback?.banner ?? banner;
+    const latestName = fallback?.username
+      ?? (latestUser?.username?.trim() !== ""
+        ? latestUser?.username ?? username
+        : username);
+    const latestAvatar = fallback?.avatar ?? latestUser?.avatar ?? avatar;
+    const latestBanner = fallback?.banner ?? latestUser?.banner ?? banner;
     const latestProfileId = latestUser?.profile_id
       ?? latestUser?.id
       ?? fallback?.profileId
@@ -929,7 +956,7 @@ export function buildAccountTab(
     }
   }
 
-  async function selectDefaultAvatar(category: string, avatarName: string): Promise<void> {
+  async function selectDefaultAvatar(category: string, avatarName: string, previewUrl?: string): Promise<void> {
     if (options.onSelectDefaultAvatar === undefined) {
       setText(mediaError, "Выбор стандартного аватара недоступен.");
       return;
@@ -941,7 +968,12 @@ export function buildAccountTab(
     defaultAvatarSelectionInProgress = true;
     setText(mediaError, "");
     syncMediaControlsAvailability();
+    const previousAvatar = authStore.getState().user?.avatar ?? avatar;
     try {
+      if (previewUrl !== undefined) {
+        updateUser({ avatar: previewUrl });
+        syncProfilePreviewWithStore({ avatar: previewUrl });
+      }
       const updated = await options.onSelectDefaultAvatar(category, avatarName);
       syncProfilePreviewWithStore({
         username: updated.username,
@@ -949,7 +981,12 @@ export function buildAccountTab(
         banner: updated.banner ?? null,
         profileId: updated.profile_id ?? updated.id,
       });
+      return;
     } catch (err: unknown) {
+      if (previewUrl !== undefined) {
+        updateUser({ avatar: previousAvatar });
+        syncProfilePreviewWithStore({ avatar: previousAvatar });
+      }
       setText(mediaError, err instanceof Error ? err.message : "Не удалось выбрать стандартный аватар.");
       throw err;
     } finally {
@@ -990,7 +1027,11 @@ export function buildAccountTab(
     const fileName = createElement("div", { class: "account-media-file-name" }, "Файл не выбран");
     appendChildren(pickerRow, pickFileBtn, fileName);
 
-    const hiddenInput = createElement("input", { type: "file", accept: "image/*", style: "display:none;" }) as HTMLInputElement;
+    const hiddenInput = createElement("input", {
+      type: "file",
+      accept: PROFILE_MEDIA_ACCEPT_ATTR,
+      style: "display:none;",
+    }) as HTMLInputElement;
     const stageWrap = createElement("div", {
       class: `account-crop-stage-wrap${isAvatar ? " avatar" : " banner"}`,
       style: `width:${previewWidth}px;height:${previewHeight}px;`,
@@ -1109,6 +1150,21 @@ export function buildAccountTab(
     }
 
     function loadFile(file: File): void {
+      saveBtn.disabled = true;
+      if (!isSupportedProfileMediaFile(file)) {
+        sourceImage = null;
+        setText(fileName, file.name);
+        setText(modalError, "Поддерживаются JPG, PNG, WEBP, GIF, BMP и AVIF.");
+        renderStage();
+        return;
+      }
+      if (file.size > PROFILE_MEDIA_MAX_SOURCE_SIZE_BYTES) {
+        sourceImage = null;
+        setText(fileName, file.name);
+        setText(modalError, `Файл слишком большой. Выберите изображение до ${formatProfileMediaLimitLabel()}.`);
+        renderStage();
+        return;
+      }
       if (objectUrl !== null) {
         URL.revokeObjectURL(objectUrl);
         objectUrl = null;
@@ -1226,6 +1282,10 @@ export function buildAccountTab(
         sourceImage.naturalHeight * zoom * scaleY,
       );
 
+      const exportMime = isAvatar ? "image/png" : "image/jpeg";
+      const exportFilename = isAvatar ? "avatar.png" : "banner.jpg";
+      const exportQuality = isAvatar ? 0.95 : 0.92;
+
       exportCanvas.toBlob((blob) => {
         if (blob === null) {
           setText(modalError, "Не удалось сохранить изображение.");
@@ -1233,14 +1293,14 @@ export function buildAccountTab(
           setText(saveBtn, "Сохранить");
           return;
         }
-        const file = new File([blob], kind === "avatar" ? "avatar.png" : "banner.png", { type: "image/png" });
+        const file = new File([blob], exportFilename, { type: exportMime });
         void uploadAndApplyProfileMedia(kind, file).then(() => {
           closeModal();
         }).catch(() => {
           saveBtn.disabled = false;
           setText(saveBtn, "Сохранить");
         });
-      }, "image/png", 0.95);
+      }, exportMime, exportQuality);
     }, { signal: modalSignal.signal });
 
     renderStage();
@@ -1256,6 +1316,10 @@ export function buildAccountTab(
     const status = createElement("div", { class: "account-default-avatars-state" }, "Загрузка списка аватаров...");
     const error = createElement("div", { class: "account-default-avatars-error" });
     const groups = createElement("div", { class: "account-default-avatars-groups" });
+    let selectedCategory: string | null = null;
+    let selectedAvatarName: string | null = null;
+    let selectedPreviewUrl: string | null = null;
+    let selectedButton: HTMLButtonElement | null = null;
     appendChildren(modalShell.body, status, error, groups);
 
     const renderPreview = (target: HTMLDivElement, previewUrl: string): void => {
@@ -1286,6 +1350,25 @@ export function buildAccountTab(
       });
     };
 
+    const setSelectedAvatar = (
+      button: HTMLButtonElement,
+      category: string,
+      avatarName: string,
+      previewUrl: string,
+      saveBtn: HTMLButtonElement,
+    ): void => {
+      if (selectedButton !== null) {
+        selectedButton.classList.remove("selected");
+      }
+      selectedButton = button;
+      selectedButton.classList.add("selected");
+      selectedCategory = category;
+      selectedAvatarName = avatarName;
+      selectedPreviewUrl = previewUrl;
+      saveBtn.disabled = false;
+      setText(error, "");
+    };
+
     void ensureDefaultAvatarCatalog().then((categories) => {
       if (modalSignal.signal.aborted) {
         return;
@@ -1312,11 +1395,13 @@ export function buildAccountTab(
           const label = createElement("div", { class: "account-default-avatar-name" }, avatarEntry.name);
           renderPreview(previewWrap, avatarEntry.preview_url);
           button.addEventListener("click", () => {
-            void selectDefaultAvatar(category.name, avatarEntry.name).then(() => {
-              closeModal();
-            }).catch(() => {
-              // Error text already shown under profile card.
-            });
+            setSelectedAvatar(
+              button,
+              category.name,
+              avatarEntry.name,
+              avatarEntry.preview_url,
+              saveBtn,
+            );
           }, { signal: modalSignal.signal });
           appendChildren(button, previewWrap, label);
           grid.appendChild(button);
@@ -1338,8 +1423,27 @@ export function buildAccountTab(
       type: "button",
       style: "background:var(--bg-active);margin-left:0;",
     }, "Закрыть");
+    const saveBtn = createElement("button", {
+      class: "ac-btn",
+      type: "button",
+      style: "margin-left:0;",
+    }, "РЎРѕС…СЂР°РЅРёС‚СЊ") as HTMLButtonElement;
+    saveBtn.disabled = true;
     closeBtn.addEventListener("click", closeModal, { signal: modalSignal.signal });
-    footer.appendChild(closeBtn);
+    saveBtn.addEventListener("click", () => {
+      if (selectedCategory === null || selectedAvatarName === null || selectedPreviewUrl === null) {
+        return;
+      }
+      saveBtn.disabled = true;
+      closeBtn.disabled = true;
+      void selectDefaultAvatar(selectedCategory, selectedAvatarName, selectedPreviewUrl).then(() => {
+        closeModal();
+      }).catch(() => {
+        saveBtn.disabled = false;
+        closeBtn.disabled = false;
+      });
+    }, { signal: modalSignal.signal });
+    appendChildren(footer, closeBtn, saveBtn);
     modalShell.body.appendChild(footer);
   }
 

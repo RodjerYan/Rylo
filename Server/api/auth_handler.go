@@ -289,6 +289,15 @@ func handleRegister(database *db.DB, replicator *replication.Replicator, registr
 			if !adminBypass {
 				if err := database.ConsumeInviteAndRevokeBestEffort(req.InviteCode, uid); err != nil {
 					slog.Warn("failed to update local invite cache after remote consume", "code", req.InviteCode, "error", err)
+				} else {
+					inv, getErr := database.GetInvite(req.InviteCode)
+					if getErr != nil {
+						slog.Warn("failed to load invite after remote consume", "code", req.InviteCode, "error", getErr)
+					} else if inv != nil {
+						if err := replicator.MirrorInvite(r.Context(), inv); err != nil {
+							slog.Warn("failed to refresh remote invite snapshot after registration", "code", req.InviteCode, "error", err)
+						}
+					}
 				}
 			}
 		} else if !adminBypass {

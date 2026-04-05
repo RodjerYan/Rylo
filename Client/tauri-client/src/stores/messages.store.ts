@@ -32,6 +32,7 @@ export interface Message {
   readonly pinned: boolean;
   readonly editedAt: string | null;
   readonly deleted: boolean;
+  readonly deleting?: boolean;
   readonly timestamp: string;
   readonly localState?: "sending";
 }
@@ -173,6 +174,11 @@ function messageSort(a: Message, b: Message): number {
 /** Maximum messages retained per channel. Oldest messages are evicted when exceeded. */
 const MAX_MESSAGES_PER_CHANNEL = 500;
 let nextPendingLocalId = -1;
+const deleteAnimationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function deleteTimerKey(channelId: number, messageId: number): string {
+  return `${channelId}:${messageId}`;
+}
 
 // -----------------------------------------------------------------------------
 // Initial state
@@ -314,18 +320,65 @@ export function editMessage(payload: ChatEditedPayload): void {
 
 /** Soft-delete: mark message as deleted but keep in array. */
 export function deleteMessage(payload: ChatDeletedPayload): void {
+  const timerKey = deleteTimerKey(payload.channel_id, payload.message_id);
+  const existingTimer = deleteAnimationTimers.get(timerKey);
+  if (existingTimer !== undefined) {
+    clearTimeout(existingTimer);
+  }
+
   messagesStore.setState((prev) => {
     const channelMessages = prev.messagesByChannel.get(payload.channel_id);
     if (!channelMessages) return prev;
 
-    const updatedList = channelMessages.map((msg) =>
-      msg.id === payload.message_id ? { ...msg, deleted: true } : msg,
-    );
+    let changed = false;
+    const updatedList = channelMessages.map((msg) => {
+      if (msg.id !== payload.message_id) {
+        return msg;
+      }
+      if (msg.deleted || msg.deleting) {
+        return msg;
+      }
+      changed = true;
+      return { ...msg, deleting: true };
+    });
+
+    if (!changed) {
+      return prev;
+    }
 
     const updatedMessages = new Map(prev.messagesByChannel);
     updatedMessages.set(payload.channel_id, updatedList);
     return { ...prev, messagesByChannel: updatedMessages };
   });
+
+  const timer = setTimeout(() => {
+    deleteAnimationTimers.delete(timerKey);
+    messagesStore.setState((prev) => {
+      const channelMessages = prev.messagesByChannel.get(payload.channel_id);
+      if (!channelMessages) return prev;
+
+      let changed = false;
+      const updatedList = channelMessages.map((msg) => {
+        if (msg.id !== payload.message_id) {
+          return msg;
+        }
+        if (msg.deleted && !msg.deleting) {
+          return msg;
+        }
+        changed = true;
+        return { ...msg, deleting: false, deleted: true };
+      });
+
+      if (!changed) {
+        return prev;
+      }
+
+      const updatedMessages = new Map(prev.messagesByChannel);
+      updatedMessages.set(payload.channel_id, updatedList);
+      return { ...prev, messagesByChannel: updatedMessages };
+    });
+  }, 220);
+  deleteAnimationTimers.set(timerKey, timer);
 }
 
 /** Toggle the pinned state of a message (optimistic update after API call). */
@@ -425,6 +478,12 @@ export function confirmSend(
 
 /** Clear all messages for a channel. */
 export function clearChannelMessages(channelId: number): void {
+  for (const [key, timer] of deleteAnimationTimers) {
+    if (key.startsWith(`${channelId}:`)) {
+      clearTimeout(timer);
+      deleteAnimationTimers.delete(key);
+    }
+  }
   messagesStore.setState((prev) => {
     const updatedMessages = new Map(prev.messagesByChannel);
     updatedMessages.delete(channelId);

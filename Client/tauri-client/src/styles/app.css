@@ -308,6 +308,14 @@
   position: absolute; bottom: -1px; right: -1px;
   width: 12px; height: 12px; border-radius: var(--radius-circle);
   border: 3px solid rgba(17,18,20,.6);
+  animation: statusDotPulse 3.2s ease-in-out infinite;
+}
+.user-bar .status-dot.status-dot--online { background: var(--green); }
+.user-bar .status-dot.status-dot--idle { background: var(--yellow); }
+.user-bar .status-dot.status-dot--dnd { background: var(--red); }
+.user-bar .status-dot.status-dot--offline {
+  background: #e05a5a;
+  animation-duration: 4.8s;
 }
 .user-bar .ub-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .user-bar .ub-name { font-size: 13px; font-weight: 600; color: white; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2; }
@@ -464,6 +472,25 @@
 .message:first-child, .msg-day-divider + .message { margin-top: 0; }
 .message:hover { background: var(--bg-modifier-hover); }
 .message.grouped { min-height: 1.375rem; margin-top: var(--message-inline-spacing); }
+.message.deleting {
+  overflow: hidden;
+  pointer-events: none;
+  transform-origin: top center;
+  animation: messageDeleteCollapse 0.22s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.message.deleting .msg-avatar,
+.message.deleting .msg-header,
+.message.deleting .msg-text,
+.message.deleting .msg-reply-ref,
+.message.deleting .msg-attachments,
+.message.deleting .msg-actions-bar,
+.message.deleting .msg-reactions,
+.message.deleting .msg-edited,
+.message.deleting .embed-wrap,
+.message.deleting .link-preview,
+.message.deleting .attachment-card {
+  animation: messageDeleteFade 0.18s ease forwards;
+}
 .message .msg-avatar {
   position: absolute; left: var(--avatar-offset-left); top: 4px;
   width: var(--avatar-size); height: var(--avatar-size); border-radius: var(--radius-circle);
@@ -1752,6 +1779,11 @@
   border-color: var(--accent);
   background: var(--bg-hover);
 }
+.account-default-avatar-item.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-hover));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
 .account-default-avatar-item:disabled {
   opacity: .65;
   cursor: not-allowed;
@@ -2315,6 +2347,25 @@
   margin-top: 8px;
   color: var(--text-normal);
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.profile-status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 2px rgba(17, 18, 20, 0.26);
+  animation: statusDotPulse 3.4s ease-in-out infinite;
+}
+.profile-status-indicator--online { background: var(--green); }
+.profile-status-indicator--idle { background: var(--yellow); }
+.profile-status-indicator--dnd { background: var(--red); }
+.profile-status-indicator--offline {
+  background: #e05a5a;
+  animation-duration: 4.8s;
 }
 
 /* ── Virtual scroll content fade-in on channel switch ── */
@@ -2330,6 +2381,34 @@
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+@keyframes messageDeleteCollapse {
+  0% {
+    opacity: 1;
+    max-height: 520px;
+    margin-top: var(--message-spacing);
+    padding-top: 0.125rem;
+    padding-bottom: 0.125rem;
+    transform: scale(1);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    max-height: 0;
+    margin-top: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    transform: scale(0.985);
+    filter: blur(1px);
+  }
+}
+@keyframes messageDeleteFade {
+  0% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-3px); }
+}
+@keyframes statusDotPulse {
+  0%, 100% { opacity: .7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.08); }
 }
 @keyframes slideIn {
   from { opacity: 0; transform: scale(.95); }

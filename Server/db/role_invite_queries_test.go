@@ -2,6 +2,8 @@ package db_test
 
 import (
 	"testing"
+
+	"github.com/rylo/server/db"
 )
 
 // ─── GetRoleByID tests ────────────────────────────────────────────────────────
@@ -173,4 +175,54 @@ func TestListInvitesByCreator_FiltersOtherUsers(t *testing.T) {
 	if invites[0].CreatedBy != ownerID {
 		t.Fatalf("ListInvitesByCreator CreatedBy = %d, want %d", invites[0].CreatedBy, ownerID)
 	}
+}
+
+func TestUpsertInviteSnapshot_InsertsAndUpdatesRemoteInvite(t *testing.T) {
+	database := newTestDB(t)
+	ownerID, _ := database.CreateUser("snapshot_owner", "hash", 4)
+	redeemerID, _ := database.CreateUser("snapshot_redeemer", "hash", 4)
+
+	if err := database.UpsertInviteSnapshot(&db.Invite{
+		Code:      "snapshot-code",
+		CreatedBy: ownerID,
+		MaxUses:   intPtr(5),
+		Uses:      1,
+		Revoked:   false,
+		CreatedAt: "2026-04-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("UpsertInviteSnapshot insert: %v", err)
+	}
+
+	if err := database.UpsertInviteSnapshot(&db.Invite{
+		Code:       "snapshot-code",
+		CreatedBy:  ownerID,
+		RedeemedBy: &redeemerID,
+		MaxUses:    intPtr(5),
+		Uses:       2,
+		Revoked:    true,
+		CreatedAt:  "2026-04-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("UpsertInviteSnapshot update: %v", err)
+	}
+
+	inv, err := database.GetInvite("snapshot-code")
+	if err != nil {
+		t.Fatalf("GetInvite snapshot-code: %v", err)
+	}
+	if inv == nil {
+		t.Fatal("GetInvite snapshot-code returned nil")
+	}
+	if inv.Uses != 2 {
+		t.Fatalf("Uses = %d, want 2", inv.Uses)
+	}
+	if !inv.Revoked {
+		t.Fatal("Revoked = false, want true")
+	}
+	if inv.RedeemedBy == nil || *inv.RedeemedBy != redeemerID {
+		t.Fatalf("RedeemedBy = %v, want %d", inv.RedeemedBy, redeemerID)
+	}
+}
+
+func intPtr(v int) *int {
+	return &v
 }

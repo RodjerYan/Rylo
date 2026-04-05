@@ -151,7 +151,7 @@ export function renderMessage(
   const isPending = msg.localState === "sending";
 
   const el = createElement("div", {
-    class: `${isGrouped ? "message grouped" : "message"}${isPending ? " pending" : ""}`,
+    class: `${isGrouped ? "message grouped" : "message"}${isPending ? " pending" : ""}${msg.deleting ? " deleting" : ""}`,
     "data-testid": `message-${msg.id}`,
   });
 
@@ -240,7 +240,7 @@ export function renderMessage(
     }
   }
 
-  if (!msg.deleted && !isPending) {
+  if (!msg.deleted && !msg.deleting && !isPending) {
     const actionsBar = createElement("div", { class: "msg-actions-bar" });
 
     const reactBtn = createElement("button", {

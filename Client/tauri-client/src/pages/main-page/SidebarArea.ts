@@ -20,7 +20,6 @@ import { createUserBar } from "@components/UserBar";
 import { createVoiceWidget } from "@components/VoiceWidget";
 import { createQuickSwitchOverlay } from "@components/QuickSwitchOverlay";
 import type { QuickSwitchProfile } from "@components/QuickSwitchOverlay";
-import { openUserProfile } from "@components/UserProfileOverlay";
 import { createVoiceWidgetCallbacks, createSidebarVoiceCallbacks } from "./VoiceCallbacks";
 import { createInviteManagerController } from "./OverlayManagers";
 import { uiStore, setSidebarMode, setActiveDmUser, loadCollapsedCategories } from "@stores/ui.store";
@@ -577,18 +576,6 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
             parts.push(badge);
           }
           appendChildren(dmItem, ...parts);
-          const openProfileCard = (event: Event): void => {
-            event.stopPropagation();
-            openUserProfile({
-              id: dm.recipient.id,
-              username: dm.recipient.username,
-              avatar: dm.recipient.avatar,
-              status: dm.recipient.status,
-              lastSeen: dm.recipient.lastSeen ?? undefined,
-            });
-          };
-          avatar.addEventListener("click", openProfileCard);
-          info.addEventListener("click", openProfileCard);
           dmItem.addEventListener("click", () => {
             selectDmConversation(dm);
           });

@@ -16,7 +16,6 @@ import {
 } from "@lib/dom";
 import { createIcon } from "@lib/icons";
 import type { MountableComponent } from "@lib/safe-render";
-import { openUserProfile } from "@components/UserProfileOverlay";
 import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
 
 export interface DmConversation {
@@ -109,16 +108,6 @@ function renderDmItem(
 
   // Username
   const name = createElement("span", { class: "dm-name" }, convo.username);
-  name.addEventListener("click", (e: Event) => {
-    e.stopPropagation();
-    openUserProfile({
-      id: convo.userId,
-      username: convo.username,
-      avatar: convo.avatar,
-      status: convo.status ?? "offline",
-      lastSeen: convo.lastSeen ?? null,
-    });
-  }, { signal });
 
   // Close button (hidden by default, shown on hover via CSS)
   const closeBtn = createElement("button", {
@@ -145,17 +134,6 @@ function renderDmItem(
     const unreadDot = createElement("span", { class: "dm-unread" });
     item.appendChild(unreadDot);
   }
-
-  avatar.addEventListener("click", (e: Event) => {
-    e.stopPropagation();
-    openUserProfile({
-      id: convo.userId,
-      username: convo.username,
-      avatar: convo.avatar,
-      status: convo.status ?? "offline",
-      lastSeen: convo.lastSeen ?? null,
-    });
-  }, { signal });
 
   item.addEventListener("click", () => {
     const parent = item.parentElement;

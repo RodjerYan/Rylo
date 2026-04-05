@@ -11,6 +11,7 @@ import { authStore } from "@stores/auth.store";
 import { openSettings } from "@stores/ui.store";
 import { openUserProfile } from "@components/UserProfileOverlay";
 import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
+import { formatStatusRu, getStatusIndicatorModifier, normalizeUserStatus } from "@lib/presence";
 
 export interface UserBarOptions {
   readonly onDisconnect?: () => void;
@@ -20,7 +21,6 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
   const disposable = new Disposable();
   let root: HTMLDivElement | null = null;
 
-  // Element references for targeted updates
   let avatarEl: HTMLDivElement | null = null;
   let avatarTextEl: HTMLSpanElement | null = null;
   let nameEl: HTMLSpanElement | null = null;
@@ -35,6 +35,7 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
     const username = user?.username ?? "Unknown";
     const profileId = user?.profile_id ?? user?.id ?? 0;
     const avatar = typeof user?.avatar === "string" ? user.avatar.trim() : "";
+    const liveStatus = normalizeUserStatus(user?.status ?? (state.isAuthenticated ? "online" : "offline"));
     const initial = username.charAt(0).toUpperCase() || "?";
 
     if (avatarEl !== null && avatarTextEl !== null) {
@@ -56,8 +57,7 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
           return;
         }
         const statusDot = createElement("div", {
-          class: "status-dot",
-          style: "background: var(--green); width: 10px; height: 10px; border-radius: 50%; position: absolute; bottom: 0; right: 0;",
+          class: `status-dot status-dot--${getStatusIndicatorModifier(liveStatus)}`,
         });
         avatarEl.appendChild(statusDot);
       };
@@ -95,7 +95,7 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
       setText(idEl, `ID: ${profileId}`);
     }
     if (statusEl !== null) {
-      setText(statusEl, state.isAuthenticated ? "В сети" : "Не в сети");
+      setText(statusEl, formatStatusRu(liveStatus));
     }
   }
 
@@ -130,7 +130,6 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
         username: user.username,
         avatar: user.avatar ?? null,
         banner: user.banner ?? null,
-        status: user.status ?? "offline",
         role: user.role,
       });
     });
@@ -170,10 +169,8 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
 
     appendChildren(root, profileClickableArea, buttons);
 
-    // Initial render
     updateFromState();
 
-    // Subscribe to auth changes
     disposable.onStoreChange(
       authStore,
       (s) => s.user,

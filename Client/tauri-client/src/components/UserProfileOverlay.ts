@@ -2,7 +2,12 @@ import { appendChildren, clearChildren, createElement, setText } from "@lib/dom"
 import { authStore } from "@stores/auth.store";
 import { dmStore } from "@stores/dm.store";
 import { membersStore } from "@stores/members.store";
-import { formatLastSeenRu, formatStatusRu } from "@lib/presence";
+import {
+  formatLastSeenRu,
+  formatStatusRu,
+  getStatusIndicatorModifier,
+  normalizeUserStatus,
+} from "@lib/presence";
 import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
 
 export interface UserProfileInput {
@@ -93,7 +98,8 @@ function handleEscClose(event: KeyboardEvent): void {
 function resolveUserProfile(input: UserProfileInput): UserProfileResolved {
   const member = membersStore.getState().members.get(input.id);
   const dmChannel = dmStore.getState().channels.find((dm) => dm.recipient.id === input.id);
-  const me = authStore.getState().user;
+  const authState = authStore.getState();
+  const me = authState.user;
   const isSelf = me?.id === input.id;
 
   const username = input.username
@@ -112,10 +118,11 @@ function resolveUserProfile(input: UserProfileInput): UserProfileResolved {
     ?? (isSelf ? me?.banner ?? null : null)
     ?? null;
 
-  const status = input.status
-    ?? member?.status
+  const status = member?.status
     ?? dmChannel?.recipient.status
-    ?? (isSelf ? me?.status ?? "offline" : "offline");
+    ?? (isSelf
+      ? normalizeUserStatus(me?.status ?? (authState.isAuthenticated ? "online" : "offline"))
+      : normalizeUserStatus(input.status));
   const lastSeen = input.lastSeen
     ?? member?.lastSeen
     ?? dmChannel?.recipient.lastSeen
@@ -236,11 +243,18 @@ export function openUserProfile(input: UserProfileInput): void {
     const seenLabel = resolved.status === "offline"
       ? formatLastSeenRu(resolved.lastSeen)
       : null;
-    if (seenLabel !== null) {
-      setText(statusEl, `Статус: ${statusLabel} • Был(а) в сети: ${seenLabel}`);
-    } else {
-      setText(statusEl, `Статус: ${statusLabel}`);
-    }
+    const statusText = seenLabel !== null
+      ? `Статус: ${statusLabel} • Был(а) в сети: ${seenLabel}`
+      : `Статус: ${statusLabel}`;
+    clearChildren(statusEl);
+    appendChildren(
+      statusEl,
+      createElement("span", {}, statusText),
+      createElement("span", {
+        class: `profile-status-indicator profile-status-indicator--${getStatusIndicatorModifier(resolved.status)}`,
+        "aria-hidden": "true",
+      }),
+    );
   }
   if (roleEl !== null) {
     setText(roleEl, `Роль: ${translateRole(resolved.role)}`);

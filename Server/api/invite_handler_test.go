@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,10 +16,62 @@ import (
 
 // buildInviteRouter returns a chi router with invite routes and auth middleware.
 func buildInviteRouter(database *db.DB, limiter *auth.RateLimiter) http.Handler {
+	return buildInviteRouterWithReplicator(database, limiter, nil)
+}
+
+func buildInviteRouterWithReplicator(database *db.DB, limiter *auth.RateLimiter, replicator *inviteReplicatorStub) http.Handler {
 	r := chi.NewRouter()
 	api.MountAuthRoutes(r, database, limiter, nil, nil, config.RegistrationConfig{})
-	api.MountInviteRoutes(r, database, nil)
+	if replicator != nil {
+		api.MountInviteRoutes(r, database, replicator)
+	} else {
+		api.MountInviteRoutes(r, database, nil)
+	}
 	return r
+}
+
+type inviteReplicatorStub struct {
+	enabled bool
+	sync    func(context.Context) error
+	mirror  func(context.Context, *db.Invite) error
+	revoke  func(context.Context, string) error
+}
+
+func (s *inviteReplicatorStub) Enabled() bool {
+	if s == nil {
+		return false
+	}
+	return s.enabled
+}
+
+func (s *inviteReplicatorStub) SyncInviteCache(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if s.sync == nil {
+		return nil
+	}
+	return s.sync(ctx)
+}
+
+func (s *inviteReplicatorStub) MirrorInvite(ctx context.Context, inv *db.Invite) error {
+	if s == nil {
+		return nil
+	}
+	if s.mirror == nil {
+		return nil
+	}
+	return s.mirror(ctx, inv)
+}
+
+func (s *inviteReplicatorStub) RevokeInvite(ctx context.Context, code string) error {
+	if s == nil {
+		return nil
+	}
+	if s.revoke == nil {
+		return nil
+	}
+	return s.revoke(ctx, code)
 }
 
 // loginAndGetToken creates a user with a known password and returns their session token.
@@ -322,4 +375,113 @@ func TestListInvites_IncludesRevokedAndActive(t *testing.T) {
 	if rr2.Code != http.StatusOK {
 		t.Errorf("ListInvites status = %d, want 200", rr2.Code)
 	}
+}
+
+func TestListInvites_SyncsRemoteCacheBeforeQuery(t *testing.T) {
+	database := newAuthTestDB(t)
+	limiter := auth.NewRateLimiter()
+	var ownerID int64
+	replicator := &inviteReplicatorStub{
+		enabled: true,
+		sync: func(context.Context) error {
+			return database.UpsertInviteSnapshot(&db.Invite{
+				Code:      "remote1234",
+				CreatedBy: ownerID,
+				MaxUses:   intPtr(1),
+				Uses:      0,
+				Revoked:   false,
+				CreatedAt: "2026-04-05T10:00:00Z",
+			})
+		},
+	}
+	router := buildInviteRouterWithReplicator(database, limiter, replicator)
+
+	token := loginAndGetToken(t, router, database, "syncedowner", 4)
+	owner, err := database.GetUserByUsername("syncedowner")
+	if err != nil || owner == nil {
+		t.Fatalf("GetUserByUsername syncedowner: %v", err)
+	}
+	ownerID = owner.ID
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/invites", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.RemoteAddr = "127.0.0.1:9999"
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ListInvites synced status = %d, want 200; body = %s", rr.Code, rr.Body.String())
+	}
+
+	var resp []inviteResponseDTO
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode synced invites response: %v", err)
+	}
+	if len(resp) != 1 {
+		t.Fatalf("ListInvites synced count = %d, want 1", len(resp))
+	}
+	if resp[0].Code != "remote1234" {
+		t.Fatalf("ListInvites synced code = %q, want %q", resp[0].Code, "remote1234")
+	}
+}
+
+func TestRevokeInvite_SyncsRemoteCacheBeforeDelete(t *testing.T) {
+	database := newAuthTestDB(t)
+	limiter := auth.NewRateLimiter()
+	var ownerID int64
+	var remoteRevokeCode string
+	replicator := &inviteReplicatorStub{
+		enabled: true,
+		sync: func(context.Context) error {
+			return database.UpsertInviteSnapshot(&db.Invite{
+				Code:      "remote-revoke",
+				CreatedBy: ownerID,
+				MaxUses:   intPtr(1),
+				Uses:      0,
+				Revoked:   false,
+				CreatedAt: "2026-04-05T10:00:00Z",
+			})
+		},
+		revoke: func(_ context.Context, code string) error {
+			remoteRevokeCode = code
+			return nil
+		},
+	}
+	router := buildInviteRouterWithReplicator(database, limiter, replicator)
+
+	token := loginAndGetToken(t, router, database, "revokeowner", 4)
+	owner, err := database.GetUserByUsername("revokeowner")
+	if err != nil || owner == nil {
+		t.Fatalf("GetUserByUsername revokeowner: %v", err)
+	}
+	ownerID = owner.ID
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/invites/remote-revoke", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.RemoteAddr = "127.0.0.1:9999"
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("RevokeInvite synced status = %d, want 204; body = %s", rr.Code, rr.Body.String())
+	}
+
+	inv, err := database.GetInvite("remote-revoke")
+	if err != nil {
+		t.Fatalf("GetInvite remote-revoke: %v", err)
+	}
+	if inv == nil || !inv.Revoked {
+		t.Fatal("remote invite was not revoked locally after sync")
+	}
+	if remoteRevokeCode != "remote-revoke" {
+		t.Fatalf("remote revoke code = %q, want %q", remoteRevokeCode, "remote-revoke")
+	}
+}
+
+type inviteResponseDTO struct {
+	Code string `json:"code"`
+}
+
+func intPtr(v int) *int {
+	return &v
 }

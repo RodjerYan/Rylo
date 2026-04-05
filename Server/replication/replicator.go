@@ -43,14 +43,15 @@ const (
 )
 
 type InvitePayload struct {
-	Code      string  `json:"code"`
-	CreatedBy int64   `json:"created_by"`
-	MaxUses   *int    `json:"max_uses,omitempty"`
-	UseCount  int     `json:"use_count"`
-	ExpiresAt *string `json:"expires_at,omitempty"`
-	Revoked   bool    `json:"revoked"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
+	Code       string  `json:"code"`
+	CreatedBy  int64   `json:"created_by"`
+	RedeemedBy *int64  `json:"redeemed_by,omitempty"`
+	MaxUses    *int    `json:"max_uses,omitempty"`
+	UseCount   int     `json:"use_count"`
+	ExpiresAt  *string `json:"expires_at,omitempty"`
+	Revoked    bool    `json:"revoked"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
 }
 
 type ConsumedInvite struct {
@@ -320,19 +321,97 @@ func (r *Replicator) MirrorInvite(ctx context.Context, inv *db.Invite) error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	payload := InvitePayload{
-		Code:      inv.Code,
-		CreatedBy: inv.CreatedBy,
-		MaxUses:   inv.MaxUses,
-		UseCount:  inv.Uses,
-		ExpiresAt: inv.ExpiresAt,
-		Revoked:   inv.Revoked,
-		CreatedAt: inv.CreatedAt,
-		UpdatedAt: now,
+		Code:       inv.Code,
+		CreatedBy:  inv.CreatedBy,
+		RedeemedBy: inv.RedeemedBy,
+		MaxUses:    inv.MaxUses,
+		UseCount:   inv.Uses,
+		ExpiresAt:  inv.ExpiresAt,
+		Revoked:    inv.Revoked,
+		CreatedAt:  inv.CreatedAt,
+		UpdatedAt:  now,
 	}
 	if payload.CreatedAt == "" {
 		payload.CreatedAt = now
 	}
 	return r.putEncryptedJSON(ctx, r.invitePath(inv.Code), payload)
+}
+
+// SyncInviteCache imports invite snapshots from Yandex Disk into the local DB
+// so every device can list and manage the same invite set.
+func (r *Replicator) SyncInviteCache(ctx context.Context) error {
+	if !r.Enabled() {
+		return nil
+	}
+
+	entries, err := r.client.ListEntries(ctx, r.remotePath(remoteInvitesDir))
+	if err != nil {
+		return fmt.Errorf("list remote invites: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.Type == "dir" || !strings.HasSuffix(strings.ToLower(entry.Name), ".json.enc") {
+			continue
+		}
+
+		raw, getErr := r.getDecryptedBytes(ctx, entry.Path)
+		if getErr != nil {
+			slog.Warn("failed to read remote invite snapshot", "path", entry.Path, "error", getErr)
+			continue
+		}
+
+		var payload InvitePayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			slog.Warn("failed to decode remote invite snapshot", "path", entry.Path, "error", err)
+			continue
+		}
+		if strings.TrimSpace(payload.Code) == "" {
+			continue
+		}
+
+		creator, err := r.db.GetUserByID(payload.CreatedBy)
+		if err != nil {
+			return err
+		}
+		if creator == nil {
+			slog.Warn("skipping invite snapshot because creator is missing locally", "code", payload.Code, "created_by", payload.CreatedBy)
+			continue
+		}
+
+		redeemedBy := payload.RedeemedBy
+		if redeemedBy != nil {
+			redeemer, err := r.db.GetUserByID(*redeemedBy)
+			if err != nil {
+				return err
+			}
+			if redeemer == nil {
+				redeemedBy = nil
+			}
+		}
+
+		createdAt := strings.TrimSpace(payload.CreatedAt)
+		if createdAt == "" {
+			createdAt = strings.TrimSpace(payload.UpdatedAt)
+		}
+		if createdAt == "" {
+			createdAt = time.Now().UTC().Format(time.RFC3339)
+		}
+
+		if err := r.db.UpsertInviteSnapshot(&db.Invite{
+			Code:       payload.Code,
+			CreatedBy:  payload.CreatedBy,
+			RedeemedBy: redeemedBy,
+			MaxUses:    payload.MaxUses,
+			Uses:       payload.UseCount,
+			ExpiresAt:  payload.ExpiresAt,
+			Revoked:    payload.Revoked,
+			CreatedAt:  createdAt,
+		}); err != nil {
+			slog.Warn("failed to cache remote invite snapshot locally", "code", payload.Code, "error", err)
+		}
+	}
+
+	return nil
 }
 
 // RevokeInvite marks a remote invite as revoked.

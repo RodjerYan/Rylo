@@ -6,6 +6,7 @@
 import { loadPref } from "@components/settings/helpers";
 import { authStore } from "@stores/auth.store";
 import { channelsStore } from "@stores/channels.store";
+import { dmStore } from "@stores/dm.store";
 import type { ChatMessagePayload } from "./types";
 import { createLogger } from "./logger";
 
@@ -14,6 +15,26 @@ const log = createLogger("notifications");
 /** Check if the app window is currently focused. */
 function isWindowFocused(): boolean {
   return document.hasFocus();
+}
+
+/** Check if the document is actually visible to the user. */
+function isDocumentVisible(): boolean {
+  return !document.hidden && document.visibilityState === "visible";
+}
+
+async function isAppForeground(): Promise<boolean> {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const win = getCurrentWindow();
+    const [focused, visible, minimized] = await Promise.all([
+      win.isFocused(),
+      win.isVisible(),
+      win.isMinimized(),
+    ]);
+    return focused && visible && !minimized && isDocumentVisible();
+  } catch {
+    return isWindowFocused() && isDocumentVisible();
+  }
 }
 
 /** Check if message content contains @everyone or @here. */
@@ -26,6 +47,20 @@ function getChannelName(channelId: number): string {
   const channels = channelsStore.getState().channels;
   const channel = channels.get(channelId);
   return channel?.name ?? `Channel ${channelId}`;
+}
+
+function resolveNotificationTarget(channelId: number): { titleSuffix: string; isDm: boolean } {
+  const dmChannel = dmStore.getState().channels.find((entry) => entry.channelId === channelId);
+  if (dmChannel !== undefined) {
+    return {
+      titleSuffix: dmChannel.recipient.username,
+      isDm: true,
+    };
+  }
+  return {
+    titleSuffix: `#${getChannelName(channelId)}`,
+    isDm: false,
+  };
 }
 
 /**
@@ -42,35 +77,40 @@ export function notifyIncomingMessage(payload: ChatMessagePayload): void {
   // Don't notify for own messages
   if (currentUser !== null && payload.user.id === currentUser.id) return;
 
-  // Don't notify if the window is focused AND the message is in the active channel
-  const activeChannelId = channelsStore.getState().activeChannelId;
-  if (isWindowFocused() && payload.channel_id === activeChannelId) return;
-
   // Check @everyone suppression
   if (loadPref<boolean>("suppressEveryone", false) && containsEveryone(payload.content)) {
     return;
   }
 
-  const channelName = getChannelName(payload.channel_id);
-  const title = `${payload.user.username} in #${channelName}`;
-  const body = payload.content.length > 100
-    ? payload.content.slice(0, 100) + "..."
-    : payload.content;
+  void (async () => {
+    const activeChannelId = channelsStore.getState().activeChannelId;
+    const appForeground = await isAppForeground();
 
-  // Desktop notification
-  if (loadPref<boolean>("desktopNotifications", true)) {
-    fireDesktopNotification(title, body);
-  }
+    // Only suppress notifications if the user is actively looking at this exact chat.
+    if (appForeground && payload.channel_id === activeChannelId) {
+      return;
+    }
 
-  // Flash taskbar
-  if (loadPref<boolean>("flashTaskbar", true)) {
-    flashTaskbar();
-  }
+    const target = resolveNotificationTarget(payload.channel_id);
+    const title = target.isDm
+      ? `${payload.user.username}`
+      : `${payload.user.username} в ${target.titleSuffix}`;
+    const body = payload.content.length > 100
+      ? payload.content.slice(0, 100) + "..."
+      : payload.content;
 
-  // Notification sound
-  if (loadPref<boolean>("notificationSounds", true)) {
-    playNotificationSound();
-  }
+    if (loadPref<boolean>("desktopNotifications", true)) {
+      fireDesktopNotification(title, body);
+    }
+
+    if (loadPref<boolean>("flashTaskbar", true)) {
+      flashTaskbar();
+    }
+
+    if (loadPref<boolean>("notificationSounds", true)) {
+      playNotificationSound();
+    }
+  })();
 }
 
 /** Fire a Tauri desktop notification. Falls back to Web Notification API. */

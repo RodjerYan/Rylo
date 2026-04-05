@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,8 +11,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rylo/server/db"
 	"github.com/rylo/server/permissions"
-	"github.com/rylo/server/replication"
 )
+
+type inviteReplicator interface {
+	Enabled() bool
+	MirrorInvite(context.Context, *db.Invite) error
+	RevokeInvite(context.Context, string) error
+	SyncInviteCache(context.Context) error
+}
 
 // createInviteRequest is the JSON body for POST /api/v1/invites.
 type createInviteRequest struct {
@@ -42,18 +49,18 @@ type inviteActor struct {
 // MountInviteRoutes registers invite endpoints on the given router.
 // All routes require authentication. Any authenticated user can create invites,
 // while elevated users can manage every invite on the server.
-func MountInviteRoutes(r chi.Router, database *db.DB, replicator *replication.Replicator) {
+func MountInviteRoutes(r chi.Router, database *db.DB, replicator inviteReplicator) {
 	r.Route("/api/v1/invites", func(r chi.Router) {
 		r.Use(AuthMiddleware(database))
 
 		r.Post("/", handleCreateInvite(database, replicator))
-		r.Get("/", handleListInvites(database))
+		r.Get("/", handleListInvites(database, replicator))
 		r.Delete("/{code}", handleRevokeInvite(database, replicator))
 	})
 }
 
 // handleCreateInvite processes POST /api/v1/invites.
-func handleCreateInvite(database *db.DB, replicator *replication.Replicator) http.HandlerFunc {
+func handleCreateInvite(database *db.DB, replicator inviteReplicator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createInviteRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -123,7 +130,7 @@ func handleCreateInvite(database *db.DB, replicator *replication.Replicator) htt
 }
 
 // handleListInvites processes GET /api/v1/invites.
-func handleListInvites(database *db.DB) http.HandlerFunc {
+func handleListInvites(database *db.DB, replicator inviteReplicator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := r.Context().Value(UserKey).(*db.User)
 		if !ok || user == nil {
@@ -132,6 +139,12 @@ func handleListInvites(database *db.DB) http.HandlerFunc {
 				Message: "not authenticated",
 			})
 			return
+		}
+
+		if replicator != nil && replicator.Enabled() {
+			if err := replicator.SyncInviteCache(r.Context()); err != nil {
+				slog.Warn("handleListInvites SyncInviteCache", "err", err, "user_id", user.ID)
+			}
 		}
 
 		role, _ := r.Context().Value(RoleKey).(*db.Role)
@@ -163,7 +176,7 @@ func handleListInvites(database *db.DB) http.HandlerFunc {
 }
 
 // handleRevokeInvite processes DELETE /api/v1/invites/:code.
-func handleRevokeInvite(database *db.DB, replicator *replication.Replicator) http.HandlerFunc {
+func handleRevokeInvite(database *db.DB, replicator inviteReplicator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code := chi.URLParam(r, "code")
 		user, ok := r.Context().Value(UserKey).(*db.User)
@@ -175,6 +188,12 @@ func handleRevokeInvite(database *db.DB, replicator *replication.Replicator) htt
 			return
 		}
 		role, _ := r.Context().Value(RoleKey).(*db.Role)
+
+		if replicator != nil && replicator.Enabled() {
+			if err := replicator.SyncInviteCache(r.Context()); err != nil {
+				slog.Warn("handleRevokeInvite SyncInviteCache", "err", err, "code", code, "user_id", user.ID)
+			}
+		}
 
 		inv, err := database.GetInvite(code)
 		if err != nil {

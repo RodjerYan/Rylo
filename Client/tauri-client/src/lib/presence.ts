@@ -1,5 +1,13 @@
 import type { UserStatus } from "@lib/types";
 
+export function normalizeUserStatus(status: string | UserStatus | null | undefined): UserStatus {
+  const normalized = (status ?? "").trim().toLowerCase();
+  if (normalized === "online" || normalized === "idle" || normalized === "dnd" || normalized === "offline") {
+    return normalized;
+  }
+  return "offline";
+}
+
 function parseServerTimestamp(raw: string | null | undefined): Date | null {
   if (raw === null || raw === undefined) {
     return null;
@@ -18,7 +26,7 @@ function parseServerTimestamp(raw: string | null | undefined): Date | null {
 }
 
 export function formatStatusRu(status: string | UserStatus): string {
-  const normalized = status.trim().toLowerCase();
+  const normalized = normalizeUserStatus(status);
   if (normalized === "online") {
     return "В сети";
   }
@@ -29,6 +37,10 @@ export function formatStatusRu(status: string | UserStatus): string {
     return "Не беспокоить";
   }
   return "Не в сети";
+}
+
+export function getStatusIndicatorModifier(status: string | UserStatus): "online" | "idle" | "dnd" | "offline" {
+  return normalizeUserStatus(status);
 }
 
 export function formatLastSeenRu(lastSeen: string | null | undefined, now: Date = new Date()): string | null {
@@ -60,7 +72,7 @@ export function formatLastSeenRu(lastSeen: string | null | undefined, now: Date 
 }
 
 export function formatStatusForDmHeader(status: string | UserStatus, lastSeen?: string | null): string {
-  const normalized = status.trim().toLowerCase();
+  const normalized = normalizeUserStatus(status);
   if (normalized === "offline") {
     const seen = formatLastSeenRu(lastSeen);
     if (seen !== null) {

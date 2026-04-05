@@ -3,7 +3,7 @@
 // Each server message type maps to one or more store actions.
 
 import type { WsClient } from "./ws";
-import { authStore, setAuth, clearAuth } from "@stores/auth.store";
+import { authStore, setAuth, clearAuth, updateUser } from "@stores/auth.store";
 import { setTransientError } from "@stores/ui.store";
 import {
   setChannels,
@@ -295,6 +295,10 @@ export function wireDispatcher(ws: WsClient): DispatcherCleanup {
     ws.on(S.PRESENCE, (payload) => {
       updatePresence(payload.user_id, payload.status, payload.last_seen);
       updateDmRecipientPresence(payload.user_id, payload.status, payload.last_seen);
+      const currentUserId = authStore.getState().user?.id ?? 0;
+      if (payload.user_id === currentUserId) {
+        updateUser({ status: payload.status });
+      }
     }),
   );
 
