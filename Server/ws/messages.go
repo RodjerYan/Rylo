@@ -33,10 +33,11 @@ type presencePayload struct {
 }
 
 type memberUserPayload struct {
-	ID       int64   `json:"id"`
-	Username string  `json:"username"`
-	Avatar   *string `json:"avatar"`
-	Role     string  `json:"role"`
+	ID        int64   `json:"id"`
+	ProfileID string  `json:"profile_id,omitempty"`
+	Username  string  `json:"username"`
+	Avatar    *string `json:"avatar"`
+	Role      string  `json:"role"`
 }
 
 type memberJoinPayload struct {
@@ -155,11 +156,12 @@ type dmChannelOpenPayload struct {
 
 // dmUserPayload is the public-facing shape for a DM participant in WS events.
 type dmUserPayload struct {
-	ID       int64   `json:"id"`
-	Username string  `json:"username"`
-	Avatar   string  `json:"avatar"`
-	Status   string  `json:"status"`
-	LastSeen *string `json:"last_seen,omitempty"`
+	ID        int64   `json:"id"`
+	ProfileID string  `json:"profile_id,omitempty"`
+	Username  string  `json:"username"`
+	Avatar    string  `json:"avatar"`
+	Status    string  `json:"status"`
+	LastSeen  *string `json:"last_seen,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -229,10 +231,11 @@ func buildMemberJoin(user *db.User, roleName string) []byte {
 		Type: MsgTypeMemberJoin,
 		Payload: memberJoinPayload{
 			User: memberUserPayload{
-				ID:       user.ID,
-				Username: user.Username,
-				Avatar:   user.Avatar,
-				Role:     roleName,
+				ID:        user.ID,
+				ProfileID: db.FormatProfileID(user.ID),
+				Username:  user.Username,
+				Avatar:    user.Avatar,
+				Role:      roleName,
 			},
 		},
 	})
@@ -448,11 +451,12 @@ func buildDMChannelOpen(channelID int64, recipient *db.User) []byte {
 		Payload: dmChannelOpenPayload{
 			ChannelID: channelID,
 			Recipient: dmUserPayload{
-				ID:       recipient.ID,
-				Username: recipient.Username,
-				Avatar:   avatarStr,
-				Status:   recipient.Status,
-				LastSeen: recipient.LastSeen,
+				ID:        recipient.ID,
+				ProfileID: db.FormatProfileID(recipient.ID),
+				Username:  recipient.Username,
+				Avatar:    avatarStr,
+				Status:    recipient.Status,
+				LastSeen:  recipient.LastSeen,
 			},
 		},
 	})

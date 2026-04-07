@@ -12,6 +12,7 @@ import type {
 
 export interface Member {
   readonly id: number;
+  readonly profileId?: string;
   readonly username: string;
   readonly avatar: string | null;
   readonly role: string;
@@ -46,6 +47,7 @@ export function setMembers(members: readonly ReadyMember[]): void {
   for (const m of members) {
     map.set(m.id, {
       id: m.id,
+      profileId: m.profile_id,
       username: m.username,
       avatar: m.avatar,
       role: m.role,
@@ -70,6 +72,7 @@ export function addMember(payload: MemberJoinPayload): void {
     const next = new Map(prev.members);
     next.set(payload.user.id, {
       id: payload.user.id,
+      profileId: payload.user.profile_id,
       username: payload.user.username,
       avatar: payload.user.avatar,
       role: payload.user.role,

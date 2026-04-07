@@ -147,38 +147,51 @@ export function createInviteManagerController(opts: {
   async function open(): Promise<void> {
     const root = opts.getRoot();
     if (instance !== null || root === null) return;
+    const inviteManager = createInviteManager({
+      invites: [],
+      loading: true,
+      onCreateInvite: async () => {
+        const created = await opts.api.createInvite({});
+        return mapInviteResponse(created);
+      },
+      onRevokeInvite: async (code: string) => {
+        try {
+          await opts.api.revokeInvite(code);
+        } catch (err) {
+          log.error("Invite revoke failed", { code, error: String(err) });
+          throw err;
+        }
+      },
+      onCopyLink: (code: string) => {
+        void navigator.clipboard.writeText(code);
+      },
+      onClose: close,
+      onError: (message: string) => {
+        log.error(message);
+        showToast(message, "error");
+      },
+    });
+    instance = inviteManager;
+    inviteManager.mount(root);
+
     try {
       const raw = await opts.api.getInvites();
-      const invites = raw.map(mapInviteResponse);
-      instance = createInviteManager({
-        invites,
-        onCreateInvite: async () => {
-          const created = await opts.api.createInvite({});
-          return mapInviteResponse(created);
-        },
-        onRevokeInvite: async (code: string) => {
-          try {
-            await opts.api.revokeInvite(code);
-          } catch (err) {
-            log.error("Invite revoke failed", { code, error: String(err) });
-            throw err;
-          }
-        },
-        onCopyLink: (code: string) => {
-          void navigator.clipboard.writeText(code);
-        },
-        onClose: close,
-        onError: (message: string) => {
-          log.error(message);
-          showToast(message, "error");
-        },
-      });
-      if (root !== null) {
-        instance.mount(root);
+      if (instance !== inviteManager) {
+        return;
       }
+      inviteManager.setInvites(raw.map(mapInviteResponse));
+      inviteManager.setLoadError(null);
     } catch (err) {
-      log.error("Failed to open invite manager", { error: String(err) });
-      showToast("Failed to load invites", "error");
+      if (instance !== inviteManager) {
+        return;
+      }
+      log.error("Failed to load invites", { error: String(err) });
+      inviteManager.setLoadError("Не удалось загрузить приглашения");
+      showToast("Не удалось загрузить приглашения", "error");
+    } finally {
+      if (instance === inviteManager) {
+        inviteManager.setLoading(false);
+      }
     }
   }
 

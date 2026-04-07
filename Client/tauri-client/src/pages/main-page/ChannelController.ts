@@ -276,7 +276,6 @@ export function createChannelController(
     if (chatHeaderRefs !== null && channelType === "dm") {
       const updateDmHeader = (): void => {
         const dmChannel = dmStore.getState().channels.find((c) => c.channelId === channelId);
-        const recipientID = dmChannel?.recipient.id ?? 0;
         let statusValue = dmChannel?.recipient.status ?? "offline";
         let lastSeenValue = dmChannel?.recipient.lastSeen ?? null;
         if (dmChannel !== undefined) {
@@ -287,7 +286,7 @@ export function createChannelController(
         updateChatHeaderForDm(chatHeaderRefs, {
           username: channelName,
           status: formatStatusForDmHeader(statusValue, lastSeenValue),
-          profileID: recipientID > 0 ? recipientID : undefined,
+          profileID: dmChannel?.recipient.profileId,
         });
       };
       updateDmHeader();
@@ -312,6 +311,7 @@ export function createChannelController(
         }
         openUserProfile({
           id: dmChannel.recipient.id,
+          profileId: dmChannel.recipient.profileId,
           username: dmChannel.recipient.username,
           avatar: dmChannel.recipient.avatar,
           status: dmChannel.recipient.status,

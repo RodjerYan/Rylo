@@ -261,12 +261,39 @@ export function createMainPage(options: MainPageOptions): MountableComponent {
             username: updated.username,
             avatar: updated.avatar ?? null,
             banner: updated.banner ?? null,
-            profile_id: updated.profile_id ?? updated.id,
+            profile_id: updated.profile_id,
           });
           showToast("Аватар профиля обновлён", "success");
           return updated;
         } catch (err) {
           const msg = err instanceof Error ? err.message : "Failed to select default avatar";
+          showToast(msg, "error");
+          throw err;
+        }
+      },
+      onListDefaultBanners: async () => {
+        try {
+          const catalog = await api.getDefaultBannerCatalog();
+          return catalog.categories;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Failed to load default banners";
+          showToast(msg, "error");
+          throw err;
+        }
+      },
+      onSelectDefaultBanner: async (category, name) => {
+        try {
+          const updated = await api.selectDefaultBanner(category, name);
+          updateUser({
+            username: updated.username,
+            avatar: updated.avatar ?? null,
+            banner: updated.banner ?? null,
+            profile_id: updated.profile_id,
+          });
+          showToast("Обложка профиля обновлена", "success");
+          return updated;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Failed to select default banner";
           showToast(msg, "error");
           throw err;
         }

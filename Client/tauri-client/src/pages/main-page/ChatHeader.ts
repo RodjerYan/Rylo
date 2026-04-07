@@ -68,7 +68,7 @@ export function buildChatHeader(
 
 export function updateChatHeaderForDm(
   refs: ChatHeaderRefs,
-  recipient: { username: string; status: string; profileID?: number } | null,
+  recipient: { username: string; status: string; profileID?: string } | null,
 ): void {
   if (recipient !== null) {
     setText(refs.hashEl, "@");

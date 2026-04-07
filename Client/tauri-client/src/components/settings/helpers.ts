@@ -15,7 +15,35 @@ export const THEMES = {
   dark: { "--bg-primary": "#313338", "--bg-secondary": "#2b2d31", "--bg-tertiary": "#1e1f22", "--text-normal": "#dbdee1" },
   "neon-glow": { "--bg-primary": "#1a1b1e", "--bg-secondary": "#111214", "--bg-tertiary": "#0d0e10", "--text-normal": "#dbdee1" },
   midnight: { "--bg-primary": "#1a1a2e", "--bg-secondary": "#16213e", "--bg-tertiary": "#0f3460", "--text-normal": "#e0e0e0" },
-  light: { "--bg-primary": "#ffffff", "--bg-secondary": "#f2f3f5", "--bg-tertiary": "#e3e5e8", "--text-normal": "#313338" },
+  light: {
+    "--bg-primary": "#ffffff",
+    "--bg-secondary": "#f6f8fc",
+    "--bg-tertiary": "#edf2f8",
+    "--bg-input": "#ffffff",
+    "--bg-hover": "#e8eef8",
+    "--bg-active": "#dce6ff",
+    "--bg-overlay": "rgba(15, 23, 42, 0.26)",
+    "--bg-modifier-hover": "rgba(37, 99, 235, 0.08)",
+    "--bg-modifier-active": "rgba(37, 99, 235, 0.14)",
+    "--bg-modifier-selected": "rgba(37, 99, 235, 0.18)",
+    "--text-normal": "#1f2937",
+    "--text-muted": "#667085",
+    "--text-faint": "#7b8798",
+    "--text-micro": "#98a2b3",
+    "--text-link": "#2563eb",
+    "--header-primary": "#111827",
+    "--header-secondary": "#667085",
+    "--interactive-normal": "#667085",
+    "--interactive-hover": "#1f2937",
+    "--interactive-active": "#111827",
+    "--interactive-muted": "#98a2b3",
+    "--channel-icon": "#667085",
+    "--border": "#d8e0eb",
+    "--border-strong": "#c1cada",
+    "--scrollbar-thin-thumb": "#c5cfdd",
+    "--scrollbar-auto-thumb": "#c5cfdd",
+    "--scrollbar-auto-track": "transparent",
+  },
 } as const;
 
 export type ThemeName = keyof typeof THEMES;
@@ -87,9 +115,22 @@ export function createToggle(
 // ---------------------------------------------------------------------------
 
 export function applyTheme(name: ThemeName): void {
-  // Apply CSS variables for the theme (keeps existing behavior for inline var overrides)
-  const theme = THEMES[name];
   const root = document.documentElement;
+
+  // Clear any inline properties set by previous themes to prevent bleeding
+  // (e.g. going from Light to Dark, where Light defines more variables).
+  const allThemeVars = new Set<string>();
+  for (const t of Object.values(THEMES)) {
+    for (const key of Object.keys(t)) {
+      allThemeVars.add(key);
+    }
+  }
+  for (const key of allThemeVars) {
+    root.style.removeProperty(key);
+  }
+
+  // Apply CSS variables for the new theme
+  const theme = THEMES[name];
   for (const [key, value] of Object.entries(theme)) {
     root.style.setProperty(key, value);
   }

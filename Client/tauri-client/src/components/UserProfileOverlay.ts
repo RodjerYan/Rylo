@@ -9,9 +9,11 @@ import {
   normalizeUserStatus,
 } from "@lib/presence";
 import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
+import { getDisplayProfileId } from "@lib/profileId";
 
 export interface UserProfileInput {
   readonly id: number;
+  readonly profileId?: string;
   readonly username?: string;
   readonly avatar?: string | null;
   readonly banner?: string | null;
@@ -22,6 +24,7 @@ export interface UserProfileInput {
 
 interface UserProfileResolved {
   readonly id: number;
+  readonly profileId: string;
   readonly username: string;
   readonly avatar: string | null;
   readonly banner: string | null;
@@ -134,6 +137,13 @@ function resolveUserProfile(input: UserProfileInput): UserProfileResolved {
 
   return {
     id: input.id,
+    profileId: getDisplayProfileId(
+      input.profileId
+      ?? member?.profileId
+      ?? dmChannel?.recipient.profileId
+      ?? (isSelf ? me?.profile_id : undefined),
+      input.id,
+    ),
     username,
     avatar,
     banner,
@@ -193,11 +203,22 @@ function setBanner(banner: string | null): void {
   }
   bannerRequestSeq += 1;
   const requestId = bannerRequestSeq;
+  const defaultGradient = "linear-gradient(135deg, #5865f2 0%, #8b5cf6 100%)";
   if (banner !== null && banner.trim() !== "") {
+    // Handle solid color banners (stored as "color:#hex")
+    if (banner.startsWith("color:")) {
+      const color = banner.slice(6).trim();
+      bannerEl.style.backgroundImage = "";
+      bannerEl.style.backgroundSize = "";
+      bannerEl.style.backgroundPosition = "";
+      bannerEl.style.background = color;
+      return;
+    }
+
     const resolved = resolveServerUrl(banner);
     if (!isSafeUrl(resolved)) {
       bannerEl.style.backgroundImage = "";
-      bannerEl.style.background = "linear-gradient(135deg, #5865f2 0%, #8b5cf6 100%)";
+      bannerEl.style.background = defaultGradient;
       return;
     }
     bannerEl.style.backgroundImage = "";
@@ -208,7 +229,7 @@ function setBanner(banner: string | null): void {
       }
       if (dataUrl === null || dataUrl.trim() === "") {
         bannerEl.style.backgroundImage = "";
-        bannerEl.style.background = "linear-gradient(135deg, #5865f2 0%, #8b5cf6 100%)";
+        bannerEl.style.background = defaultGradient;
         return;
       }
       bannerEl.style.backgroundImage = `url("${dataUrl}")`;
@@ -217,13 +238,13 @@ function setBanner(banner: string | null): void {
     }).catch(() => {
       if (bannerEl !== null && requestId === bannerRequestSeq) {
         bannerEl.style.backgroundImage = "";
-        bannerEl.style.background = "linear-gradient(135deg, #5865f2 0%, #8b5cf6 100%)";
+        bannerEl.style.background = defaultGradient;
       }
     });
     return;
   }
   bannerEl.style.backgroundImage = "";
-  bannerEl.style.background = "linear-gradient(135deg, #5865f2 0%, #8b5cf6 100%)";
+  bannerEl.style.background = defaultGradient;
 }
 
 export function openUserProfile(input: UserProfileInput): void {
@@ -236,7 +257,7 @@ export function openUserProfile(input: UserProfileInput): void {
     setText(nameEl, resolved.username);
   }
   if (idEl !== null) {
-    setText(idEl, `ID: ${resolved.id}`);
+    setText(idEl, `ID: ${resolved.profileId}`);
   }
   if (statusEl !== null) {
     const statusLabel = formatStatusRu(resolved.status);

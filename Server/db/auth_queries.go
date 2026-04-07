@@ -463,12 +463,13 @@ func (d *DB) ConsumeInviteAndRevokeBestEffort(code string, redeemedBy int64) err
 
 // MemberSummary is a lightweight user shape for the ready payload.
 type MemberSummary struct {
-	ID       int64   `json:"id"`
-	Username string  `json:"username"`
-	Avatar   *string `json:"avatar"`
-	Status   string  `json:"status"`
-	Role     string  `json:"role"`
-	LastSeen *string `json:"last_seen,omitempty"`
+	ID        int64   `json:"id"`
+	ProfileID string  `json:"profile_id"`
+	Username  string  `json:"username"`
+	Avatar    *string `json:"avatar"`
+	Status    string  `json:"status"`
+	Role      string  `json:"role"`
+	LastSeen  *string `json:"last_seen,omitempty"`
 }
 
 // ListMembers returns all non-banned users as lightweight summaries.
@@ -491,6 +492,7 @@ func (d *DB) ListMembers() ([]MemberSummary, error) {
 		if err := rows.Scan(&m.ID, &m.Username, &m.Avatar, &m.Status, &m.Role, &m.LastSeen); err != nil {
 			return nil, fmt.Errorf("ListMembers scan: %w", err)
 		}
+		m.ProfileID = FormatProfileID(m.ID)
 		members = append(members, m)
 	}
 	if rows.Err() != nil {

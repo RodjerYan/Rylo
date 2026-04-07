@@ -35,9 +35,9 @@ type createDMRequest struct {
 
 // createDMResponse is the JSON response for POST /api/v1/dms.
 type createDMResponse struct {
-	ChannelID int64   `json:"channel_id"`
+	ChannelID int64     `json:"channel_id"`
 	Recipient db.DMUser `json:"recipient"`
-	Created   bool    `json:"created"`
+	Created   bool      `json:"created"`
 }
 
 // listDMsResponse is the JSON response for GET /api/v1/dms.
@@ -119,11 +119,12 @@ func handleCreateDM(database *db.DB) http.HandlerFunc {
 			avatarStr = *recipient.Avatar
 		}
 		dmUser := db.DMUser{
-			ID:       recipient.ID,
-			Username: recipient.Username,
-			Avatar:   avatarStr,
-			Status:   recipient.Status,
-			LastSeen: recipient.LastSeen,
+			ID:        recipient.ID,
+			ProfileID: db.FormatProfileID(recipient.ID),
+			Username:  recipient.Username,
+			Avatar:    avatarStr,
+			Status:    recipient.Status,
+			LastSeen:  recipient.LastSeen,
 		}
 
 		status := http.StatusOK

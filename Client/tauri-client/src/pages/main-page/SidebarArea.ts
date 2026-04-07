@@ -34,6 +34,7 @@ import {
   createTauriBackend,
 } from "@lib/profiles";
 import type { ProfileManager } from "@lib/profiles";
+import { getDisplayProfileId, matchesProfileId } from "@lib/profileId";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -123,9 +124,9 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
   const headerInviteCtrl = createInviteManagerController({ api, getRoot });
   const headerInviteBtn = createElement("button", {
     class: "sidebar-invite-btn",
-    title: "Invite people",
+    title: "Приглашения",
     "data-testid": "invite-btn",
-  }, "Invite");
+  }, "Приглашения");
   headerInviteBtn.addEventListener("click", () => { void headerInviteCtrl.open(); });
   serverHeader.appendChild(headerInviteBtn);
   unsubscribers.push(() => { headerInviteCtrl.cleanup(); });
@@ -378,6 +379,7 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
         channelId: result.channel_id,
         recipient: {
           id: result.recipient.id,
+          profileId: result.recipient.profile_id,
           username: result.recipient.username,
           avatar: result.recipient.avatar,
           status: result.recipient.status ?? member?.status ?? "offline",
@@ -565,7 +567,11 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
 
           const info = createElement("div", { class: "sidebar-dm-entry-info" });
           const name = createElement("div", { class: "sidebar-dm-entry-name" }, dm.recipient.username);
-          const status = createElement("div", { class: "sidebar-dm-entry-substatus" }, `ID: ${dm.recipient.id} • ${statusText}`);
+          const status = createElement(
+            "div",
+            { class: "sidebar-dm-entry-substatus" },
+            `ID: ${getDisplayProfileId(dm.recipient.profileId, dm.recipient.id)} • ${statusText}`,
+          );
           appendChildren(info, name, status);
           const parts: Element[] = [avatar, info];
 
@@ -755,12 +761,12 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
           return;
         }
 
-        const isNumericQuery = /^\d+$/.test(query);
         const currentUserId = authStore.getState().user?.id ?? 0;
         const members = membersStore.getState().members;
 
         const matches: Array<{
           id: number;
+          profileId: string;
           username: string;
           status: string;
           isCurrentUser: boolean;
@@ -768,14 +774,12 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
 
         for (const member of members.values()) {
           const usernameMatch = member.username.toLowerCase().includes(query);
-          const idValue = String(member.id);
-          const idMatch = isNumericQuery
-            ? idValue.includes(query)
-            : idValue === query;
+          const idMatch = matchesProfileId(query, member.profileId, member.id);
 
           if (usernameMatch || idMatch) {
             matches.push({
               id: member.id,
+              profileId: getDisplayProfileId(member.profileId, member.id),
               username: member.username,
               status: member.status,
               isCurrentUser: member.id === currentUserId,
@@ -807,7 +811,7 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
           setText(avatar, item.username.charAt(0).toUpperCase());
           const main = createElement("div", { class: "sidebar-user-search-main" });
           const name = createElement("div", { class: "sidebar-user-search-name" }, item.username);
-          const id = createElement("div", { class: "sidebar-user-search-id" }, `ID: ${item.id}`);
+          const id = createElement("div", { class: "sidebar-user-search-id" }, `ID: ${item.profileId}`);
           appendChildren(main, name, id);
           const state = createElement("div", { class: "sidebar-user-search-state" });
           const statusDot = createElement("span", {

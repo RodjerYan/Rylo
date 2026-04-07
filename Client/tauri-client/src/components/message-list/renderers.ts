@@ -151,7 +151,7 @@ export function renderMessage(
   const isPending = msg.localState === "sending";
 
   const el = createElement("div", {
-    class: `${isGrouped ? "message grouped" : "message"}${isPending ? " pending" : ""}${msg.deleting ? " deleting" : ""}`,
+    class: `${isGrouped ? "message grouped" : "message"}${isPending ? " pending" : ""}${msg.deleting ? " deleting" : ""}${msg.deleted ? " deleted" : ""}`,
     "data-testid": `message-${msg.id}`,
   });
 
@@ -214,7 +214,7 @@ export function renderMessage(
   el.appendChild(header);
 
   if (msg.deleted) {
-    const text = createElement("div", { class: "msg-text" });
+    const text = createElement("div", { class: "msg-text msg-text-deleted" });
     text.style.fontStyle = "italic";
     text.style.color = "var(--text-muted)";
     setText(text, "[message deleted]");

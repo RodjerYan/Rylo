@@ -24,11 +24,19 @@ export interface InviteItem {
 
 export interface InviteManagerOptions {
   invites: readonly InviteItem[];
+  loading?: boolean;
+  loadError?: string | null;
   onCreateInvite(): Promise<InviteItem>;
   onRevokeInvite(code: string): Promise<void>;
   onCopyLink(code: string): void;
   onClose(): void;
   onError?(message: string): void;
+}
+
+export interface InviteManagerComponent extends MountableComponent {
+  setInvites(invites: readonly InviteItem[]): void;
+  setLoading(loading: boolean): void;
+  setLoadError(message: string | null): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -68,18 +76,35 @@ function formatInviteInfo(invite: InviteItem): string {
 
 export function createInviteManager(
   options: InviteManagerOptions,
-): MountableComponent {
+): InviteManagerComponent {
   const ac = new AbortController();
   let root: HTMLDivElement | null = null;
   let listEl: HTMLDivElement | null = null;
   let emptyEl: HTMLDivElement | null = null;
+  let loadingEl: HTMLDivElement | null = null;
+  let errorEl: HTMLDivElement | null = null;
   let invites: readonly InviteItem[] = options.invites;
+  let isLoading = options.loading ?? false;
+  let loadError = options.loadError ?? null;
 
   function renderList(): void {
-    if (listEl === null || emptyEl === null) return;
+    if (listEl === null || emptyEl === null || loadingEl === null || errorEl === null) return;
     clearChildren(listEl);
 
+    loadingEl.style.display = isLoading ? "" : "none";
+    errorEl.style.display = loadError !== null ? "" : "none";
+    errorEl.textContent = loadError ?? "";
+
+    if (isLoading) {
+      emptyEl.style.display = "none";
+      listEl.style.display = "none";
+      return;
+    }
+
+    listEl.style.display = "";
+
     if (invites.length === 0) {
+      emptyEl.textContent = loadError ?? "Нет активных приглашений";
       emptyEl.style.display = "";
       return;
     }
@@ -166,8 +191,10 @@ export function createInviteManager(
     // Body
     const body = createElement("div", { class: "modal-body" });
     listEl = createElement("div", { class: "invite-manager__list" });
+    loadingEl = createElement("div", { class: "invite-manager__loading" }, "Загружаем приглашения...");
+    errorEl = createElement("div", { class: "invite-manager__error" });
     emptyEl = createElement("div", { class: "invite-manager__empty" }, "Нет активных приглашений");
-    appendChildren(body, listEl, emptyEl);
+    appendChildren(body, loadingEl, errorEl, listEl, emptyEl);
 
     // Footer
     const footer = createElement("div", { class: "modal-footer" });
@@ -213,7 +240,25 @@ export function createInviteManager(
     }
     listEl = null;
     emptyEl = null;
+    loadingEl = null;
+    errorEl = null;
   }
 
-  return { mount, destroy };
+  return {
+    mount,
+    destroy,
+    setInvites(nextInvites: readonly InviteItem[]): void {
+      invites = nextInvites;
+      loadError = null;
+      renderList();
+    },
+    setLoading(loading: boolean): void {
+      isLoading = loading;
+      renderList();
+    },
+    setLoadError(message: string | null): void {
+      loadError = message;
+      renderList();
+    },
+  };
 }

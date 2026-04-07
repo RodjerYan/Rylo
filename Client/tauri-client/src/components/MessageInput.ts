@@ -143,7 +143,34 @@ export function createMessageInput(
     textarea.value = "";
     autoResize();
     textarea.focus();
+    updateSendBtnIcon();
   }
+
+  function updateSendBtnIcon(): void {
+    if (sendBtn === null) return;
+    const hasContent = (textarea !== null && textarea.value.trim().length > 0) || pendingAttachments.length > 0;
+    if (hasContent && micMode) {
+      micMode = false;
+      sendBtn.innerHTML = "";
+      sendBtn.appendChild(createIcon("send", 20));
+    } else if (!hasContent && !micMode) {
+      micMode = true;
+      sendBtn.innerHTML = "";
+      sendBtn.appendChild(createIcon("mic", 20));
+    }
+  }
+
+  let micMode = true;
+  let sendBtn: HTMLButtonElement | null = null;
+  let recordingOverlay: HTMLDivElement | null = null;
+  let recordingTimeStr: HTMLSpanElement | null = null;
+  let mediaRecorder: MediaRecorder | null = null;
+  let audioChunks: Blob[] = [];
+  let recordStartTime = 0;
+  let recordInterval: ReturnType<typeof setInterval> | null = null;
+  let isRecording = false;
+  let canceled = false;
+  let startX = 0;
 
   /** Unique counter for preview items (before upload completes and we have a server ID). */
   let previewCounter = 0;
@@ -161,6 +188,7 @@ export function createMessageInput(
       if (pendingAttachments.length === 0) {
         attachmentPreviewBar?.classList.remove("visible");
       }
+      updateSendBtnIcon();
     }
   }
 
@@ -256,6 +284,7 @@ export function createMessageInput(
     } finally {
       pendingUploadCount--;
     }
+    updateSendBtnIcon();
   }
 
   function setReplyTo(messageId: number, username: string): void {
@@ -345,11 +374,24 @@ export function createMessageInput(
     emojiBtn.appendChild(createIcon("smile", 20));
     const gifBtn = createElement("button",
       { class: "input-btn gif-btn", "aria-label": "GIF" }, "GIF");
-    const sendBtn = createElement("button",
-      { class: "input-btn send-btn", "aria-label": "Send message", "data-testid": "send-btn" });
-    sendBtn.appendChild(createIcon("send", 20));
+    sendBtn = createElement("button",
+      { class: "input-btn send-btn", "aria-label": "Voice message / Send", "data-testid": "send-btn" });
+    sendBtn.appendChild(createIcon("mic", 20));
 
-    textarea.addEventListener("input", () => { autoResize(); maybeEmitTyping(); }, { signal });
+    // Voice recording UI
+    inputBox.style.position = "relative";
+    recordingOverlay = createElement("div", { 
+      style: "display: none; align-items: center; justify-content: space-between; flex: 1; padding: 0 16px; background: var(--bg-tertiary); border-radius: 8px; position: absolute; left: 0; top: 0; bottom: 0; right: 48px; z-index: 10;" 
+    });
+    const recordingLeft = createElement("div", { style: "display: flex; align-items: center; gap: 8px; color: var(--red);" });
+    const recordingDot = createElement("div", { style: "width: 10px; height: 10px; border-radius: 50%; background: var(--red); animation: pulse 1.5s infinite;" });
+    recordingTimeStr = createElement("span", {}, "0:00");
+    appendChildren(recordingLeft, recordingDot, recordingTimeStr);
+    const cancelText = createElement("span", { style: "color: var(--text-muted); font-size: 13px;" }, "Slide left to cancel <<");
+    appendChildren(recordingOverlay, recordingLeft, cancelText);
+    inputBox.appendChild(recordingOverlay);
+
+    textarea.addEventListener("input", () => { autoResize(); maybeEmitTyping(); updateSendBtnIcon(); }, { signal });
     textarea.addEventListener("keydown", (e: KeyboardEvent) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
       if (e.key === "Escape") {
@@ -374,7 +416,74 @@ export function createMessageInput(
       }
     }, { signal });
 
-    sendBtn.addEventListener("click", handleSend, { signal });
+    sendBtn.addEventListener("pointerdown", async (e: PointerEvent) => {
+      if (!micMode || options.onUploadFile === undefined) return;
+      e.preventDefault();
+      sendBtn?.setPointerCapture(e.pointerId);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+        mediaRecorder.onstop = () => {
+          if (recordInterval !== null) clearInterval(recordInterval);
+          if (recordingOverlay !== null) recordingOverlay.style.display = "none";
+          stream.getTracks().forEach(t => t.stop());
+          
+          if (!canceled && audioChunks.length > 0) {
+            const blob = new Blob(audioChunks, { type: "audio/webm" });
+            const file = new File([blob], `Voice message.webm`, { type: "audio/webm" });
+            handlePasteFile(file).then(() => {
+              if (textarea !== null && textarea.value.trim().length === 0) {
+                handleSend();
+              }
+            }).catch(console.error);
+          }
+          isRecording = false;
+        };
+        
+        mediaRecorder.start();
+        isRecording = true;
+        canceled = false;
+        startX = e.clientX;
+        recordStartTime = Date.now();
+        
+        if (recordingOverlay !== null) recordingOverlay.style.display = "flex";
+        recordInterval = setInterval(() => {
+          const s = Math.floor((Date.now() - recordStartTime) / 1000);
+          const m = Math.floor(s / 60);
+          const sec = s % 60;
+          if (recordingTimeStr !== null) recordingTimeStr.textContent = `${m}:${sec.toString().padStart(2, "0")}`;
+        }, 500);
+      } catch (err) {
+        // microphone access denied or unavailable
+        console.error("Mic error", err);
+      }
+    }, { signal });
+
+    sendBtn.addEventListener("pointermove", (e: PointerEvent) => {
+      if (micMode && isRecording) {
+        if (startX - e.clientX > 80) { // Slide left to cancel
+          canceled = true;
+          mediaRecorder?.stop();
+        }
+      }
+    }, { signal });
+
+    sendBtn.addEventListener("pointerup", (e: PointerEvent) => {
+      if (micMode) {
+        sendBtn?.releasePointerCapture(e.pointerId);
+        if (isRecording) mediaRecorder?.stop();
+      }
+    }, { signal });
+
+    sendBtn.addEventListener("click", (e: MouseEvent) => {
+      if (micMode) {
+        e.preventDefault();
+      } else {
+        handleSend();
+      }
+    }, { signal });
 
     // Picker state (declared together so both toggle functions can cross-close)
     let emojiPicker: { element: HTMLDivElement; destroy(): void } | null = null;

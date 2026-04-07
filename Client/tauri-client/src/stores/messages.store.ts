@@ -51,6 +51,8 @@ interface PendingSend {
   readonly serverTimestamp: string | null;
 }
 
+const MESSAGE_DELETE_ANIMATION_MS = 420;
+
 export interface MessagesState {
   /** Messages per channel: channelId -> ordered array of Message */
   readonly messagesByChannel: ReadonlyMap<number, readonly Message[]>;
@@ -377,7 +379,7 @@ export function deleteMessage(payload: ChatDeletedPayload): void {
       updatedMessages.set(payload.channel_id, updatedList);
       return { ...prev, messagesByChannel: updatedMessages };
     });
-  }, 220);
+  }, MESSAGE_DELETE_ANIMATION_MS);
   deleteAnimationTimers.set(timerKey, timer);
 }
 

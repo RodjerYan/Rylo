@@ -25,6 +25,8 @@ import { buildKeybindsTab } from "./settings/KeybindsTab";
 import { buildAdvancedTab } from "./settings/AdvancedTab";
 import { createLogsTab } from "./settings/LogsTab";
 
+import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "./message-list/attachments";
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -36,6 +38,8 @@ export interface SettingsOverlayOptions {
   onUploadProfileMedia?(file: File): Promise<{ id: string; url: string; filename: string }>;
   onListDefaultAvatars?(): Promise<readonly DefaultAvatarCategoryResponse[]>;
   onSelectDefaultAvatar?(category: string, name: string): Promise<MemberResponse>;
+  onListDefaultBanners?(): Promise<readonly DefaultAvatarCategoryResponse[]>;
+  onSelectDefaultBanner?(category: string, name: string): Promise<MemberResponse>;
   onLogout(): void;
   onDeleteAccount(password: string): Promise<void>;
   onStatusChange(status: UserStatus): void;
@@ -117,6 +121,7 @@ export function createSettingsOverlay(
   let activeTab: TabName = authenticated ? "Account" : "Appearance";
   const tabButtons = new Map<TabName, HTMLButtonElement>();
   let unsubUi: (() => void) | null = null;
+  let unsubAuth: (() => void) | null = null;
 
   // Stateful tabs — create via factory for proper cleanup on tab switch
   const logsTab = createLogsTab(() => activeTab, ac.signal);
@@ -179,19 +184,64 @@ export function createSettingsOverlay(
     const sidebar = createElement("div", { class: "settings-sidebar" });
 
     // User profile section at top of sidebar
-    const user = authStore.getState().user;
     const profileSection = createElement("div", { class: "settings-sidebar-profile" });
-    const avatarEl = createElement("div", { class: "settings-sidebar-avatar" },
-      (user?.username ?? "U").charAt(0).toUpperCase());
+    const avatarEl = createElement("div", { class: "settings-sidebar-avatar" });
     const profileInfo = createElement("div", {});
-    const profileName = createElement("div", { class: "settings-sidebar-name" },
-      user?.username ?? "Unknown");
+    const profileName = createElement("div", { class: "settings-sidebar-name" });
     const editProfileLink = createElement("div", { class: "settings-sidebar-edit" }, "Edit Profile");
     if (authenticated) {
       editProfileLink.addEventListener("click", () => setActiveTab("Account"), { signal: ac.signal });
     } else {
       editProfileLink.style.display = "none";
     }
+
+    let avatarRequestSeq = 0;
+    function updateProfileSidebar(): void {
+      const u = authStore.getState().user;
+      const username = u?.username ?? "Unknown";
+      const initial = (u?.username ?? "U").charAt(0).toUpperCase();
+      const avatarStr = typeof u?.avatar === "string" ? u.avatar.trim() : "";
+
+      profileName.textContent = username;
+      avatarRequestSeq += 1;
+      const requestId = avatarRequestSeq;
+      clearChildren(avatarEl);
+
+      const fallback = (): void => {
+        if (requestId !== avatarRequestSeq) return;
+        avatarEl.textContent = initial;
+      };
+
+      if (avatarStr !== "") {
+        const resolved = resolveServerUrl(avatarStr);
+        if (isSafeUrl(resolved)) {
+          void fetchImageAsDataUrl(resolved).then((dataUrl) => {
+            if (requestId !== avatarRequestSeq || dataUrl === null || dataUrl.trim() === "") {
+              fallback();
+              return;
+            }
+            clearChildren(avatarEl);
+            const img = createElement("img", {
+              src: dataUrl,
+              alt: username,
+              style: "width:100%;height:100%;border-radius:50%;object-fit:cover;",
+            });
+            avatarEl.appendChild(img);
+          }).catch(() => fallback());
+        } else {
+          fallback();
+        }
+      } else {
+        fallback();
+      }
+    }
+
+    updateProfileSidebar();
+    unsubAuth = authStore.subscribeSelector(
+      (s) => s.user,
+      () => updateProfileSidebar(),
+    );
+
     appendChildren(profileInfo, profileName, editProfileLink);
     appendChildren(profileSection, avatarEl, profileInfo);
     sidebar.appendChild(profileSection);
@@ -301,6 +351,10 @@ export function createSettingsOverlay(
     if (unsubUi !== null) {
       unsubUi();
       unsubUi = null;
+    }
+    if (unsubAuth !== null) {
+      unsubAuth();
+      unsubAuth = null;
     }
     logsTab.cleanup();
     voiceTab.cleanup();

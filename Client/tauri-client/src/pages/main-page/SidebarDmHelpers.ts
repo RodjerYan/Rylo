@@ -100,9 +100,11 @@ export async function handleCreateDm(
       channelId: result.channel_id,
       recipient: {
         id: result.recipient.id,
+        profileId: result.recipient.profile_id,
         username: result.recipient.username,
         avatar: result.recipient.avatar,
         status: result.recipient.status ?? member?.status ?? "offline",
+        lastSeen: result.recipient.last_seen ?? member?.lastSeen ?? null,
       },
       lastMessageId: null,
       lastMessage: "",

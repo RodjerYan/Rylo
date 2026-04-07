@@ -33,6 +33,7 @@ const (
 	remoteInvitesDir = "invites"
 	remoteLocksDir   = ".locks"
 	remoteAvatarsDir = "Avatars"
+	remoteBannersDir = "Banners"
 )
 
 const (
@@ -40,6 +41,7 @@ const (
 	EventTypeMessage       = "message"
 	EventTypeMessageDelete = "message_delete"
 	EventTypePresence      = "presence"
+	EventTypeReaction      = "reaction"
 )
 
 type InvitePayload struct {
@@ -114,6 +116,19 @@ type PresencePayload struct {
 	SourceServer string `json:"source_server,omitempty"`
 }
 
+type ReactionPayload struct {
+	SyncID         string   `json:"sync_id,omitempty"`
+	ChannelKind    string   `json:"channel_kind"`
+	ChannelID      int64    `json:"channel_id"`
+	ChannelName    string   `json:"channel_name"`
+	SenderUsername string   `json:"sender_username"`
+	MessageSyncID  string   `json:"message_sync_id"`
+	Emoji          string   `json:"emoji"`
+	Action         string   `json:"action"` // "add" or "remove"
+	Timestamp      string   `json:"timestamp"`
+	DMParticipants []string `json:"dm_participants,omitempty"`
+}
+
 type ImportedMessage struct {
 	MessageID        int64
 	ChannelID        int64
@@ -138,6 +153,16 @@ type ImportedPresence struct {
 	Status       string
 	LastSeen     string
 	SourceServer string
+}
+
+type ImportedReaction struct {
+	MessageID        int64
+	ChannelID        int64
+	ChannelKind      string
+	UserID           int64
+	Emoji            string
+	Action           string // "add" or "remove"
+	DMParticipantIDs []int64
 }
 
 type DefaultAvatarCategory struct {
@@ -170,6 +195,7 @@ type Replicator struct {
 	importedHook  func(ImportedMessage)
 	deletedHook   func(ImportedDelete)
 	presenceHook  func(ImportedPresence)
+	reactionHook  func(ImportedReaction)
 }
 
 // New creates a Yandex Disk replicator. When the feature is disabled, a
@@ -265,6 +291,15 @@ func (r *Replicator) SetImportedPresenceHook(hook func(ImportedPresence)) {
 		return
 	}
 	r.presenceHook = hook
+}
+
+// SetImportedReactionHook registers a callback invoked when a remote reaction
+// event is imported into the local DB.
+func (r *Replicator) SetImportedReactionHook(hook func(ImportedReaction)) {
+	if r == nil {
+		return
+	}
+	r.reactionHook = hook
 }
 
 // PrepareRegistration writes the remote encrypted user profile and a remote
@@ -643,6 +678,92 @@ func (r *Replicator) GetDefaultAvatarBytes(ctx context.Context, category, filena
 	return data, safeFilename, nil
 }
 
+// ListDefaultBannerCatalog returns all configured default banners grouped by
+// folder name from /<root>/Banners on Yandex Disk.
+func (r *Replicator) ListDefaultBannerCatalog(ctx context.Context) ([]DefaultAvatarCategory, error) {
+	if !r.Enabled() {
+		return []DefaultAvatarCategory{}, nil
+	}
+
+	categoryEntries, err := r.client.ListEntries(ctx, r.remotePath(remoteBannersDir))
+	if err != nil {
+		return nil, err
+	}
+
+	catalog := make([]DefaultAvatarCategory, 0, len(categoryEntries))
+	for _, entry := range categoryEntries {
+		if entry.Type != "dir" {
+			continue
+		}
+
+		categoryName := strings.TrimSpace(entry.Name)
+		if categoryName == "" {
+			continue
+		}
+
+		bannerEntries, listErr := r.client.ListEntries(ctx, entry.Path)
+		if listErr != nil {
+			slog.Warn("failed to list default banner category", "category", categoryName, "error", listErr)
+			continue
+		}
+
+		banners := make([]DefaultAvatarEntry, 0, len(bannerEntries))
+		for _, banner := range bannerEntries {
+			if banner.Type == "dir" {
+				continue
+			}
+			bannerName := strings.TrimSpace(banner.Name)
+			if bannerName == "" || !isSupportedDefaultAvatarFilename(bannerName) {
+				continue
+			}
+			banners = append(banners, DefaultAvatarEntry{Name: bannerName})
+		}
+		if len(banners) == 0 {
+			continue
+		}
+
+		sort.Slice(banners, func(i, j int) bool {
+			return strings.ToLower(banners[i].Name) < strings.ToLower(banners[j].Name)
+		})
+		catalog = append(catalog, DefaultAvatarCategory{
+			Name:    categoryName,
+			Avatars: banners, // Re-using structs
+		})
+	}
+
+	sort.Slice(catalog, func(i, j int) bool {
+		return strings.ToLower(catalog[i].Name) < strings.ToLower(catalog[j].Name)
+	})
+	return catalog, nil
+}
+
+// GetDefaultBannerBytes reads one default banner file from
+// /<root>/Banners/{category}/{filename}.
+func (r *Replicator) GetDefaultBannerBytes(ctx context.Context, category, filename string) ([]byte, string, error) {
+	if !r.Enabled() {
+		return nil, "", fmt.Errorf("replication disabled")
+	}
+
+	safeCategory, err := sanitizeDefaultAvatarPathSegment(category, "category")
+	if err != nil {
+		return nil, "", err
+	}
+	safeFilename, err := sanitizeDefaultAvatarPathSegment(filename, "filename")
+	if err != nil {
+		return nil, "", err
+	}
+	if !isSupportedDefaultAvatarFilename(safeFilename) {
+		return nil, "", fmt.Errorf("unsupported banner file type")
+	}
+
+	remotePath := r.remotePath(remoteBannersDir, safeCategory, safeFilename)
+	data, err := r.client.Get(ctx, remotePath)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, safeFilename, nil
+}
+
 // EnsureLocalAttachment downloads an attachment from Yandex Disk into local storage.
 func (r *Replicator) EnsureLocalAttachment(ctx context.Context, id string, store *storage.Storage) error {
 	if !r.Enabled() {
@@ -703,6 +824,21 @@ func (r *Replicator) MirrorPresence(ctx context.Context, payload PresencePayload
 	}
 
 	eventID, eventPath, err := r.publishEvent(ctx, EventTypePresence, payload)
+	if err != nil {
+		return err
+	}
+	return r.db.MarkSyncEventProcessed(eventPath, eventID)
+}
+
+// MirrorReaction publishes a remote reaction event after a local reaction was added or removed.
+func (r *Replicator) MirrorReaction(ctx context.Context, payload ReactionPayload) error {
+	if !r.Enabled() {
+		return nil
+	}
+	if payload.Timestamp == "" {
+		payload.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	}
+	eventID, eventPath, err := r.publishEvent(ctx, EventTypeReaction, payload)
 	if err != nil {
 		return err
 	}
@@ -792,6 +928,12 @@ func (r *Replicator) applyEvent(ctx context.Context, env EventEnvelope) error {
 			return fmt.Errorf("decode presence payload: %w", err)
 		}
 		return r.applyPresence(payload)
+	case EventTypeReaction:
+		var payload ReactionPayload
+		if err := json.Unmarshal(env.Payload, &payload); err != nil {
+			return fmt.Errorf("decode reaction payload: %w", err)
+		}
+		return r.applyReaction(payload)
 	default:
 		return fmt.Errorf("unknown event type %q", env.Type)
 	}
@@ -957,6 +1099,77 @@ func (r *Replicator) applyMessageDelete(payload MessageDeletePayload) error {
 	return nil
 }
 
+func (r *Replicator) applyReaction(payload ReactionPayload) error {
+	sender, err := r.db.GetUserByUsername(payload.SenderUsername)
+	if err != nil {
+		return err
+	}
+	if sender == nil {
+		return fmt.Errorf("reaction sender %q not imported yet", payload.SenderUsername)
+	}
+
+	// Find the message by sync_id.
+	if payload.MessageSyncID == "" {
+		return fmt.Errorf("reaction missing message_sync_id")
+	}
+	msgID, err := r.db.FindMessageIDBySyncID(payload.MessageSyncID)
+	if err != nil {
+		return err
+	}
+	if msgID == 0 {
+		// The message hasn't been imported yet — skip silently.
+		slog.Debug("applyReaction: message not found for sync_id, skipping", "sync_id", payload.MessageSyncID)
+		return nil
+	}
+
+	msg, err := r.db.GetMessage(msgID)
+	if err != nil || msg == nil {
+		return fmt.Errorf("applyReaction: failed to load message %d: %w", msgID, err)
+	}
+
+	channelID := msg.ChannelID
+
+	// Resolve DM participant IDs for broadcasting.
+	var participantIDs []int64
+	if payload.ChannelKind == "dm" {
+		for _, uname := range payload.DMParticipants {
+			u, uErr := r.db.GetUserByUsername(uname)
+			if uErr != nil || u == nil {
+				continue
+			}
+			participantIDs = append(participantIDs, u.ID)
+		}
+	}
+
+	switch payload.Action {
+	case "add":
+		if err := r.db.AddReaction(msgID, sender.ID, payload.Emoji); err != nil {
+			// Might be a duplicate — not an error for replication.
+			slog.Debug("applyReaction: AddReaction failed (possibly duplicate)", "err", err, "msg_id", msgID)
+			return nil
+		}
+	case "remove":
+		if err := r.db.RemoveReaction(msgID, sender.ID, payload.Emoji); err != nil {
+			// Might already be removed — not an error for replication.
+			slog.Debug("applyReaction: RemoveReaction failed", "err", err, "msg_id", msgID)
+			return nil
+		}
+	default:
+		return fmt.Errorf("applyReaction: unknown action %q", payload.Action)
+	}
+
+	r.emitImportedReaction(ImportedReaction{
+		MessageID:        msgID,
+		ChannelID:        channelID,
+		ChannelKind:      payload.ChannelKind,
+		UserID:           sender.ID,
+		Emoji:            payload.Emoji,
+		Action:           payload.Action,
+		DMParticipantIDs: participantIDs,
+	})
+	return nil
+}
+
 func (r *Replicator) findDeletedMessageTarget(channelID int64, payload MessageDeletePayload) (int64, error) {
 	if payload.SyncID != "" {
 		msgID, err := r.db.FindMessageIDBySyncID(payload.SyncID)
@@ -1073,6 +1286,18 @@ func (r *Replicator) emitImportedPresence(event ImportedPresence) {
 		}
 	}()
 	r.presenceHook(event)
+}
+
+func (r *Replicator) emitImportedReaction(event ImportedReaction) {
+	if r.reactionHook == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Warn("imported reaction hook panicked", "panic", rec)
+		}
+	}()
+	r.reactionHook(event)
 }
 
 func (r *Replicator) readInvitePayload(ctx context.Context, code string) (InvitePayload, error) {

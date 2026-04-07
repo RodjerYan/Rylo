@@ -442,6 +442,28 @@ export function createApiClient(
       );
     },
 
+    getDefaultBannerCatalog(signal?: AbortSignal): Promise<DefaultAvatarCatalogResponse> {
+      return request<DefaultAvatarCatalogResponse>(
+        "GET",
+        "/profile/default-banners",
+        undefined,
+        signal,
+      );
+    },
+
+    selectDefaultBanner(
+      category: string,
+      name: string,
+      signal?: AbortSignal,
+    ): Promise<MemberResponse> {
+      return request<MemberResponse>(
+        "POST",
+        "/profile/default-banner",
+        { category, name },
+        signal,
+      );
+    },
+
     // ── Invites ───────────────────────────────────────────
 
     getInvites(signal?: AbortSignal): Promise<InviteResponse[]> {

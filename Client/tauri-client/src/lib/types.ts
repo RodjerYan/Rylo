@@ -58,7 +58,7 @@ export interface MessageUser {
 /** User object with role, used in auth_ok and member_join. */
 export interface UserWithRole extends MessageUser {
   readonly role: string;
-  readonly profile_id?: number;
+  readonly profile_id?: string;
   readonly banner?: string | null;
   readonly status?: UserStatus;
   readonly totp_enabled?: boolean;
@@ -100,6 +100,7 @@ export interface ReadyChannel {
 /** Member object in the ready payload. */
 export interface ReadyMember {
   readonly id: number;
+  readonly profile_id?: string;
   readonly username: string;
   readonly avatar: string | null;
   readonly role: string;
@@ -313,6 +314,7 @@ export interface MemberBanPayload {
 /** DM recipient object in DM channel payloads. */
 export interface DmRecipient {
   readonly id: number;
+  readonly profile_id?: string;
   readonly username: string;
   readonly avatar: string | null;
   readonly status: string;
@@ -539,7 +541,7 @@ export interface MessagesResponse {
 /** Member object from REST API. */
 export interface MemberResponse {
   readonly id: number;
-  readonly profile_id?: number;
+  readonly profile_id?: string;
   readonly username: string;
   readonly avatar: string | null;
   readonly banner?: string | null;

@@ -12,6 +12,7 @@ import { openSettings } from "@stores/ui.store";
 import { openUserProfile } from "@components/UserProfileOverlay";
 import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
 import { formatStatusRu, getStatusIndicatorModifier, normalizeUserStatus } from "@lib/presence";
+import { getDisplayProfileId } from "@lib/profileId";
 
 export interface UserBarOptions {
   readonly onDisconnect?: () => void;
@@ -33,7 +34,7 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
     const state = authStore.getState();
     const user = state.user;
     const username = user?.username ?? "Unknown";
-    const profileId = user?.profile_id ?? user?.id ?? 0;
+    const profileId = getDisplayProfileId(user?.profile_id, user?.id);
     const avatar = typeof user?.avatar === "string" ? user.avatar.trim() : "";
     const liveStatus = normalizeUserStatus(user?.status ?? (state.isAuthenticated ? "online" : "offline"));
     const initial = username.charAt(0).toUpperCase() || "?";
@@ -127,6 +128,7 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
       }
       openUserProfile({
         id: user.id,
+        profileId: user.profile_id,
         username: user.username,
         avatar: user.avatar ?? null,
         banner: user.banner ?? null,

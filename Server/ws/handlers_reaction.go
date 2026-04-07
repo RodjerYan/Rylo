@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/rylo/server/permissions"
+	"github.com/rylo/server/replication"
 )
 
 // registerReactionHandlers registers reaction_add and reaction_remove handlers.
@@ -92,6 +93,45 @@ func (h *Hub) handleReaction(ctx context.Context, c *Client, add bool, payload j
 		slog.Warn("reaction failed", "action", action, "msg_id", msgID, "user_id", c.userID, "err", err)
 		c.sendMsg(buildErrorMsg(ErrCodeConflict, "reaction failed"))
 		return
+	}
+
+	// Replicate to Yandex Disk so other servers see the reaction.
+	if h.replicator != nil && h.replicator.Enabled() {
+		syncID, syncErr := h.db.GetMessageSyncID(msgID)
+		if syncErr != nil {
+			slog.Error("ws handleReaction GetMessageSyncID", "err", syncErr, "msg_id", msgID)
+		} else if syncID != "" {
+			var username string
+			if c.user != nil {
+				username = c.user.Username
+			}
+			reactionPayload := replication.ReactionPayload{
+				ChannelKind:    reactCh.Type,
+				ChannelID:      msg.ChannelID,
+				ChannelName:    reactCh.Name,
+				SenderUsername: username,
+				MessageSyncID:  syncID,
+				Emoji:          p.Emoji,
+				Action:         action,
+			}
+			if reactIsDM {
+				participantIDs, pErr := h.db.GetDMParticipantIDs(msg.ChannelID)
+				if pErr != nil {
+					slog.Error("ws handleReaction GetDMParticipantIDs for replication", "err", pErr, "channel_id", msg.ChannelID)
+				} else {
+					for _, pid := range participantIDs {
+						user, userErr := h.db.GetUserByID(pid)
+						if userErr != nil || user == nil {
+							continue
+						}
+						reactionPayload.DMParticipants = append(reactionPayload.DMParticipants, user.Username)
+					}
+				}
+			}
+			if mirrorErr := h.replicator.MirrorReaction(ctx, reactionPayload); mirrorErr != nil {
+				slog.Error("ws handleReaction MirrorReaction", "err", mirrorErr, "msg_id", msgID, "action", action)
+			}
+		}
 	}
 
 	reactionMsg := buildReactionUpdate(msgID, msg.ChannelID, c.userID, p.Emoji, action)

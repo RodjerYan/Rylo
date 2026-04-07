@@ -141,3 +141,31 @@ func (h *Hub) HandleReplicatedPresence(event replication.ImportedPresence) {
 		"status", event.Status,
 		"source_server", event.SourceServer)
 }
+
+// HandleReplicatedReaction pushes an imported Yandex Disk reaction to connected
+// clients immediately, so cross-server delivery does not wait for a manual refresh.
+func (h *Hub) HandleReplicatedReaction(event replication.ImportedReaction) {
+	if event.MessageID <= 0 || event.ChannelID <= 0 || event.UserID <= 0 {
+		return
+	}
+
+	reactionMsg := buildReactionUpdate(event.MessageID, event.ChannelID, event.UserID, event.Emoji, event.Action)
+	if event.ChannelKind == "dm" {
+		participantIDs := event.DMParticipantIDs
+		if len(participantIDs) == 0 {
+			loaded, err := h.db.GetDMParticipantIDs(event.ChannelID)
+			if err != nil {
+				slog.Error("HandleReplicatedReaction GetDMParticipantIDs", "err", err, "channel_id", event.ChannelID)
+				return
+			}
+			participantIDs = loaded
+		}
+
+		for _, pid := range participantIDs {
+			h.SendToUser(pid, reactionMsg)
+		}
+		return
+	}
+
+	h.BroadcastToChannel(event.ChannelID, reactionMsg)
+}

@@ -11,21 +11,22 @@ import (
 
 // DMChannelInfo holds a DM channel summary for the channel list.
 type DMChannelInfo struct {
-	ChannelID     int64   `json:"channel_id"`
-	Recipient     DMUser  `json:"recipient"`
-	LastMessageID *int64  `json:"last_message_id"`
-	LastMessage   string  `json:"last_message"`
-	LastMessageAt string  `json:"last_message_at"`
-	UnreadCount   int     `json:"unread_count"`
+	ChannelID     int64  `json:"channel_id"`
+	Recipient     DMUser `json:"recipient"`
+	LastMessageID *int64 `json:"last_message_id"`
+	LastMessage   string `json:"last_message"`
+	LastMessageAt string `json:"last_message_at"`
+	UnreadCount   int    `json:"unread_count"`
 }
 
 // DMUser is the public-facing shape for a DM participant.
 type DMUser struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Avatar   string `json:"avatar"`
-	Status   string `json:"status"`
-	LastSeen *string `json:"last_seen,omitempty"`
+	ID        int64   `json:"id"`
+	ProfileID string  `json:"profile_id"`
+	Username  string  `json:"username"`
+	Avatar    string  `json:"avatar"`
+	Status    string  `json:"status"`
+	LastSeen  *string `json:"last_seen,omitempty"`
 }
 
 // ─── GetOrCreateDMChannel ───────────────────────────────────────────────────
@@ -190,6 +191,7 @@ func (d *DB) GetUserDMChannels(userID int64) ([]DMChannelInfo, error) {
 			id := lastMsgID.Int64
 			info.LastMessageID = &id
 		}
+		info.Recipient.ProfileID = FormatProfileID(info.Recipient.ID)
 		result = append(result, info)
 	}
 	if rows.Err() != nil {

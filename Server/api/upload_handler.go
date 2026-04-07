@@ -53,6 +53,11 @@ type selectDefaultAvatarRequest struct {
 	Name     string `json:"name"`
 }
 
+type selectDefaultBannerRequest struct {
+	Category string `json:"category"`
+	Name     string `json:"name"`
+}
+
 // MountUploadRoutes registers upload and file-serving endpoints.
 // allowedOrigins controls the Access-Control-Allow-Origin header on served files.
 func MountUploadRoutes(r chi.Router, database *db.DB, store *storage.Storage, allowedOrigins []string, replicator *replication.Replicator) {
@@ -68,6 +73,13 @@ func MountUploadRoutes(r chi.Router, database *db.DB, store *storage.Storage, al
 	r.Get("/api/v1/profile/default-avatars/{category}/{name}", handleServeDefaultAvatarPreview(replicator))
 	r.With(AuthMiddleware(database)).
 		Post("/api/v1/profile/default-avatar", handleSelectDefaultAvatar(database, store, replicator))
+
+	// Default banners (stored in /RyloData/Banners on Yandex Disk).
+	r.With(AuthMiddleware(database)).
+		Get("/api/v1/profile/default-banners", handleListDefaultBanners(replicator))
+	r.Get("/api/v1/profile/default-banners/{category}/{name}", handleServeDefaultBannerPreview(replicator))
+	r.With(AuthMiddleware(database)).
+		Post("/api/v1/profile/default-banner", handleSelectDefaultBanner(database, store, replicator))
 
 	// File serving is public (URLs are unguessable UUIDs).
 	r.Get("/api/v1/files/{id}", handleServeFile(database, store, allowedOrigins, replicator))
@@ -450,6 +462,195 @@ func handleSelectDefaultAvatar(database *db.DB, store *storage.Storage, replicat
 			return
 		}
 
+		writeJSON(w, http.StatusOK, toUserResponse(updated))
+	}
+}
+
+func handleListDefaultBanners(replicator *replication.Replicator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if replicator == nil || !replicator.Enabled() {
+			writeJSON(w, http.StatusOK, defaultAvatarCatalogResponse{
+				Categories: []defaultAvatarCategoryResponse{},
+			})
+			return
+		}
+
+		catalog, err := replicator.ListDefaultBannerCatalog(r.Context())
+		if err != nil {
+			slog.Warn("failed to list default banners from Yandex Disk", "error", err)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to list default banners",
+			})
+			return
+		}
+
+		categories := make([]defaultAvatarCategoryResponse, 0, len(catalog))
+		for _, category := range catalog {
+			banners := make([]defaultAvatarItemResponse, 0, len(category.Avatars))
+			for _, banner := range category.Avatars {
+				banners = append(banners, defaultAvatarItemResponse{
+					Name:       banner.Name,
+					PreviewURL: "/api/v1/profile/default-banners/" + url.PathEscape(category.Name) + "/" + url.PathEscape(banner.Name),
+				})
+			}
+			categories = append(categories, defaultAvatarCategoryResponse{
+				Name:    category.Name,
+				Avatars: banners,
+			})
+		}
+
+		writeJSON(w, http.StatusOK, defaultAvatarCatalogResponse{
+			Categories: categories,
+		})
+	}
+}
+
+func handleServeDefaultBannerPreview(replicator *replication.Replicator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if replicator == nil || !replicator.Enabled() {
+			http.NotFound(w, r)
+			return
+		}
+
+		category := chi.URLParam(r, "category")
+		name := chi.URLParam(r, "name")
+		data, filename, err := replicator.GetDefaultBannerBytes(r.Context(), category, name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		contentType := http.DetectContentType(data)
+		if !strings.HasPrefix(contentType, "image/") {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "default banner is not an image",
+			})
+			return
+		}
+
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filename}))
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		http.ServeContent(w, r, filename, time.Now().UTC(), bytes.NewReader(data))
+	}
+}
+
+func handleSelectDefaultBanner(database *db.DB, store *storage.Storage, replicator *replication.Replicator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if replicator == nil || !replicator.Enabled() {
+			writeJSON(w, http.StatusServiceUnavailable, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "default banners are unavailable while Yandex Disk sync is disabled",
+			})
+			return
+		}
+
+		user, ok := r.Context().Value(UserKey).(*db.User)
+		if !ok || user == nil {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{
+				Error:   "UNAUTHORIZED",
+				Message: "not authenticated",
+			})
+			return
+		}
+
+		var req selectDefaultBannerRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "malformed request body",
+			})
+			return
+		}
+		if req.Category == "" || req.Name == "" {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "category and name are required",
+			})
+			return
+		}
+
+		data, filename, err := replicator.GetDefaultBannerBytes(r.Context(), req.Category, req.Name)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "default banner not found",
+			})
+			return
+		}
+
+		fileID := uuid.New().String()
+		if err := store.Save(fileID, bytes.NewReader(data)); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "failed to save selected banner",
+			})
+			return
+		}
+
+		mimeType := http.DetectContentType(data)
+		if !strings.HasPrefix(mimeType, "image/") {
+			_ = store.Delete(fileID)
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error:   "INVALID_INPUT",
+				Message: "selected banner is not an image",
+			})
+			return
+		}
+
+		var width, height *int
+		cfg, _, decodeErr := image.DecodeConfig(bytes.NewReader(data))
+		if decodeErr == nil {
+			w2 := cfg.Width
+			h2 := cfg.Height
+			width = &w2
+			height = &h2
+		}
+
+		if err := database.CreateAttachment(fileID, filename, fileID, mimeType, int64(len(data)), width, height); err != nil {
+			_ = store.Delete(fileID)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to persist selected banner",
+			})
+			return
+		}
+
+		if err := replicator.MirrorAttachment(r.Context(), fileID, data); err != nil {
+			_ = store.Delete(fileID)
+			_ = database.DeleteAttachmentRecord(fileID)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to mirror selected banner",
+			})
+			return
+		}
+
+		bannerURL := "/api/v1/files/" + fileID
+		if updErr := database.UpdateUserProfile(user.ID, nil, nil, &bannerURL); updErr != nil {
+			_ = store.Delete(fileID)
+			_ = database.DeleteAttachmentRecord(fileID)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to update user banner",
+			})
+			return
+		}
+
+		if mirrorErr := replicator.MirrorUserAsset(r.Context(), user.ID, "banner", fileID); mirrorErr != nil {
+			slog.Warn("failed to mirror banner to Yandex Disk", "user_id", user.ID, "error", mirrorErr)
+		}
+
+		updated, err := database.GetUserByID(user.ID)
+		if err != nil || updated == nil {
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to load updated profile",
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, toUserResponse(updated))
 	}
 }

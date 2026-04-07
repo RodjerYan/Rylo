@@ -11,6 +11,7 @@ import type { DefaultAvatarCategoryResponse, UserStatus } from "@lib/types";
 import { authStore, updateUser } from "@stores/auth.store";
 import type { SettingsOverlayOptions } from "../SettingsOverlay";
 import { loadPref, savePref } from "./helpers";
+import { getDisplayProfileId } from "@lib/profileId";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,9 +32,41 @@ interface ProfileCardResult {
 
 interface ProfileCardModel {
   readonly username: string;
-  readonly profileId: number;
+  readonly profileId: string;
   readonly avatar: string | null;
   readonly banner: string | null;
+}
+
+const BANNER_COLOR_PREFIX = "color:";
+
+/** Discord-style preset banner colors. */
+const BANNER_PRESET_COLORS: readonly string[] = [
+  "#5865f2", // Blurple
+  "#eb459e", // Fuchsia
+  "#ed4245", // Red
+  "#fee75c", // Yellow
+  "#57f287", // Green
+  "#3ba55d", // Dark Green
+  "#0d7377", // Teal
+  "#00b4d8", // Sky Blue
+  "#5bc0eb", // Light Blue
+  "#1d428a", // Navy
+  "#9b59b6", // Purple
+  "#e67e22", // Orange
+  "#e74c3c", // Crimson
+  "#f47fff", // Pink
+  "#1abc9c", // Aqua
+  "#11806a", // Deep Teal
+  "#2f3136", // Dark Gray
+  "#99aab5", // Light Gray
+];
+
+function isBannerColor(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith(BANNER_COLOR_PREFIX);
+}
+
+function parseBannerColor(value: string): string {
+  return value.slice(BANNER_COLOR_PREFIX.length).trim();
 }
 
 const PROFILE_MEDIA_MAX_SOURCE_SIZE_BYTES = 20 * 1024 * 1024;
@@ -76,6 +109,7 @@ function buildProfileCard(model: ProfileCardModel): ProfileCardResult {
     title: "Изменить обложку",
   }) as HTMLButtonElement;
   bannerEditBtn.appendChild(createIcon("pencil", 16));
+  bannerEditBtn.style.display = "none";
   banner.appendChild(bannerEditBtn);
 
   // Avatar overlapping the banner
@@ -89,6 +123,7 @@ function buildProfileCard(model: ProfileCardModel): ProfileCardResult {
     title: "Изменить аватар",
   }) as HTMLButtonElement;
   avatarEditBtn.appendChild(createIcon("pencil", 14));
+  avatarEditBtn.style.display = "none";
   appendChildren(avatarWrap, avatarLarge, statusDot, avatarEditBtn);
 
   // Header row
@@ -176,6 +211,16 @@ function applyProfileBanner(target: HTMLDivElement, bannerUrl: string | null): v
   target.dataset.bannerRequestToken = requestToken;
 
   if (bannerUrl !== null && bannerUrl.trim() !== "") {
+    // Handle solid color banners (stored as "color:#hex")
+    if (isBannerColor(bannerUrl)) {
+      const color = parseBannerColor(bannerUrl);
+      target.style.backgroundImage = "";
+      target.style.backgroundSize = "";
+      target.style.backgroundPosition = "";
+      target.style.background = color;
+      return;
+    }
+
     const resolvedUrl = resolveServerUrl(bannerUrl);
     if (!isSafeUrl(resolvedUrl)) {
       target.style.backgroundImage = "";
@@ -645,16 +690,16 @@ function buildDeleteAccountSection(
   const header = createElement("div", {
     class: "settings-section-title",
     style: "color:var(--red)",
-  }, "Danger Zone");
+  }, "Опасная зона");
 
   const description = createElement("div", {
     style: "color:var(--text-muted);font-size:13px;margin-bottom:12px",
-  }, "Permanently delete your account and all associated data.");
+  }, "Безвозвратно удалить ваш аккаунт и все связанные с ним данные.");
 
   const deleteBtn = createElement("button", {
     class: "ac-btn account-delete-btn",
     "data-testid": "delete-account-trigger",
-  }, "Delete Account");
+  }, "Удалить аккаунт");
 
   // Inline confirmation area (hidden by default)
   const confirmArea = createElement("div", {
@@ -665,12 +710,12 @@ function buildDeleteAccountSection(
 
   const warningText = createElement("div", {
     style: "color:var(--red);font-size:13px;margin-bottom:12px;line-height:1.4",
-  }, "This action is permanent and cannot be undone. All your data will be deleted. Enter your password to confirm.");
+  }, "Это действие необратимо. Все ваши данные будут удалены. Введите пароль для подтверждения.");
 
   const passwordInput = createElement("input", {
     class: "form-input",
     type: "password",
-    placeholder: "Enter your password",
+    placeholder: "Введите пароль",
     style: "margin-bottom:12px",
     "data-testid": "delete-account-password",
   });
@@ -684,11 +729,11 @@ function buildDeleteAccountSection(
   const confirmBtn = createElement("button", {
     class: "ac-btn account-delete-btn",
     "data-testid": "delete-account-confirm",
-  }, "Confirm Delete");
+  }, "Подтвердить удаление");
   const cancelBtn = createElement("button", {
     class: "ac-btn",
     style: "background:var(--bg-active)",
-  }, "Cancel");
+  }, "Отмена");
 
   appendChildren(btnRow, confirmBtn, cancelBtn);
   appendChildren(confirmArea, warningText, passwordInput, errorEl, btnRow);
@@ -747,7 +792,7 @@ export function buildAccountTab(
   const section = createElement("div", { class: "settings-pane active" });
   const user = authStore.getState().user;
   const username = user?.username ?? "Unknown";
-  const profileId = user?.profile_id ?? user?.id ?? 0;
+  const profileId = getDisplayProfileId(user?.profile_id, user?.id);
   const avatar = user?.avatar ?? null;
   const banner = user?.banner ?? null;
 
@@ -784,16 +829,30 @@ export function buildAccountTab(
   const usernameError = createElement("div", { style: "color:var(--red);font-size:13px;margin-top:4px" });
   editForm.appendChild(usernameError);
 
-  const openEditForm = () => {
+  let profileEditMode = false;
+
+  function setProfileEditMode(enabled: boolean): void {
+    profileEditMode = enabled;
+    card.classList.toggle("account-card--editing", enabled);
+    syncMediaControlsAvailability();
+  }
+
+  const openEditFormWithoutFocus = () => {
+    setProfileEditMode(true);
     editForm.style.display = "flex";
     editInput.value = authStore.getState().user?.username ?? "";
+  };
+
+  const openEditFormWithFocus = () => {
+    openEditFormWithoutFocus();
     editInput.focus();
   };
 
-  editUserProfileBtn.addEventListener("click", openEditForm, { signal });
-  editUsernameBtn.addEventListener("click", openEditForm, { signal });
+  editUserProfileBtn.addEventListener("click", openEditFormWithoutFocus, { signal });
+  editUsernameBtn.addEventListener("click", openEditFormWithFocus, { signal });
 
   cancelBtn.addEventListener("click", () => {
+    setProfileEditMode(false);
     editForm.style.display = "none";
     setText(usernameError, "");
   }, { signal });
@@ -813,6 +872,7 @@ export function buildAccountTab(
       setText(headerName, effectiveName);
       setText(usernameValue, effectiveName);
       applyProfileAvatar(avatarLarge, latestUser?.avatar ?? avatar, effectiveName);
+      setProfileEditMode(false);
       editForm.style.display = "none";
     }).catch((err: unknown) => {
       setText(usernameError, err instanceof Error ? err.message : "Не удалось обновить имя пользователя.");
@@ -828,12 +888,18 @@ export function buildAccountTab(
   let defaultAvatarSelectionInProgress = false;
   let cachedDefaultAvatarCategories: readonly DefaultAvatarCategoryResponse[] | null = null;
   let defaultCatalogPromise: Promise<readonly DefaultAvatarCategoryResponse[]> | null = null;
+  let defaultBannerSelectionInProgress = false;
+  let cachedDefaultBannerCategories: readonly DefaultAvatarCategoryResponse[] | null = null;
+  let defaultBannerCatalogPromise: Promise<readonly DefaultAvatarCategoryResponse[]> | null = null;
 
   function syncMediaControlsAvailability(): void {
     const uploadDisabledByFeature = options.onUploadProfileMedia === undefined;
-    const busy = mediaUploadInProgress || defaultAvatarSelectionInProgress;
-    avatarEditBtn.disabled = uploadDisabledByFeature || busy;
-    bannerEditBtn.disabled = uploadDisabledByFeature || busy;
+    const disabled = !profileEditMode || uploadDisabledByFeature || mediaUploadInProgress || defaultAvatarSelectionInProgress || defaultBannerSelectionInProgress;
+    avatarEditBtn.disabled = disabled;
+    bannerEditBtn.disabled = disabled;
+    const displayStyle = profileEditMode ? "" : "none";
+    avatarEditBtn.style.display = displayStyle;
+    bannerEditBtn.style.display = displayStyle;
   }
 
   function clampNumber(value: number, min: number, max: number): number {
@@ -890,7 +956,7 @@ export function buildAccountTab(
     username?: string;
     avatar?: string | null;
     banner?: string | null;
-    profileId?: number;
+    profileId?: string;
   }): void {
     const latestUser = authStore.getState().user;
     const latestName = fallback?.username
@@ -899,10 +965,10 @@ export function buildAccountTab(
         : username);
     const latestAvatar = fallback?.avatar ?? latestUser?.avatar ?? avatar;
     const latestBanner = fallback?.banner ?? latestUser?.banner ?? banner;
-    const latestProfileId = latestUser?.profile_id
-      ?? latestUser?.id
-      ?? fallback?.profileId
-      ?? profileId;
+    const latestProfileId = getDisplayProfileId(
+      latestUser?.profile_id ?? fallback?.profileId,
+      latestUser?.id ?? user?.id,
+    );
 
     setText(headerName, latestName);
     setText(usernameValue, latestName);
@@ -979,7 +1045,7 @@ export function buildAccountTab(
         username: updated.username,
         avatar: updated.avatar ?? null,
         banner: updated.banner ?? null,
-        profileId: updated.profile_id ?? updated.id,
+        profileId: updated.profile_id,
       });
       return;
     } catch (err: unknown) {
@@ -995,22 +1061,76 @@ export function buildAccountTab(
     }
   }
 
+  async function ensureDefaultBannerCatalog(): Promise<readonly DefaultAvatarCategoryResponse[]> {
+    if (cachedDefaultBannerCategories !== null) {
+      return cachedDefaultBannerCategories;
+    }
+    if (options.onListDefaultBanners === undefined) {
+      return [];
+    }
+    if (defaultBannerCatalogPromise !== null) {
+      return defaultBannerCatalogPromise;
+    }
+    defaultBannerCatalogPromise = options.onListDefaultBanners().then((categories) => {
+      cachedDefaultBannerCategories = categories;
+      return categories;
+    }).finally(() => {
+      defaultBannerCatalogPromise = null;
+    });
+    return defaultBannerCatalogPromise;
+  }
+
+  async function selectDefaultBannerRaw(category: string, bannerName: string, previewUrl?: string): Promise<void> {
+    if (options.onSelectDefaultBanner === undefined) {
+      setText(mediaError, "Выбор стандартной обложки недоступен.");
+      return;
+    }
+    if (defaultBannerSelectionInProgress) {
+      return;
+    }
+
+    defaultBannerSelectionInProgress = true;
+    setText(mediaError, "");
+    syncMediaControlsAvailability();
+    const previousBanner = authStore.getState().user?.banner ?? banner;
+    try {
+      if (previewUrl !== undefined) {
+        updateUser({ banner: previewUrl });
+        syncProfilePreviewWithStore({ banner: previewUrl });
+      }
+      const updated = await options.onSelectDefaultBanner!(category, bannerName);
+      syncProfilePreviewWithStore({
+        username: updated.username,
+        avatar: updated.avatar ?? null,
+        banner: updated.banner ?? null,
+        profileId: updated.profile_id,
+      });
+      return;
+    } catch (err: unknown) {
+      if (previewUrl !== undefined) {
+        updateUser({ banner: previousBanner });
+        syncProfilePreviewWithStore({ banner: previousBanner });
+      }
+      setText(mediaError, err instanceof Error ? err.message : "Не удалось выбрать стандартную обложку.");
+      throw err;
+    } finally {
+      defaultBannerSelectionInProgress = false;
+      syncMediaControlsAvailability();
+    }
+  }
+
   function openCropModal(kind: "avatar" | "banner"): void {
     const title = kind === "avatar" ? "Изменить аватар" : "Изменить обложку";
     const modalShell = buildModalShell(title);
     const modalSignal = new AbortController();
     const closeModal = (): void => {
-      if (objectUrl !== null) {
-        URL.revokeObjectURL(objectUrl);
-        objectUrl = null;
-      }
       modalSignal.abort();
       modalShell.close();
     };
 
     const isAvatar = kind === "avatar";
-    const previewWidth = isAvatar ? 280 : 520;
-    const previewHeight = isAvatar ? 280 : 174;
+    const previewWidth = isAvatar ? 280 : 600;
+    const previewHeight = isAvatar ? 280 : 200;
     const outputWidth = isAvatar ? 640 : 1600;
     const outputHeight = isAvatar ? 640 : 534;
 
@@ -1034,7 +1154,7 @@ export function buildAccountTab(
     }) as HTMLInputElement;
     const stageWrap = createElement("div", {
       class: `account-crop-stage-wrap${isAvatar ? " avatar" : " banner"}`,
-      style: `width:${previewWidth}px;height:${previewHeight}px;`,
+      style: `width:${previewWidth}px;height:${previewHeight}px;margin: 0 auto;`,
     });
     const stageCanvas = createElement("canvas", {
       class: "account-crop-stage-canvas",
@@ -1064,8 +1184,8 @@ export function buildAccountTab(
     appendChildren(actionRow, cancelBtn, saveBtn);
     appendChildren(modalShell.body, description, pickerRow, stageWrap, controlsRow, modalError, actionRow, hiddenInput);
 
-    let objectUrl: string | null = null;
     let sourceImage: HTMLImageElement | null = null;
+    let fileLoadSequence = 0;
     let zoom = 1;
     let minZoom = 1;
     let maxZoom = 1;
@@ -1149,7 +1269,17 @@ export function buildAccountTab(
       renderStage();
     }
 
-    function loadFile(file: File): void {
+    function readFileAsDataUrl(file: File): Promise<string> {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+        reader.onerror = () => reject(new Error("Не удалось прочитать файл."));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function loadFile(file: File): Promise<void> {
+      const currentLoadId = ++fileLoadSequence;
       saveBtn.disabled = true;
       if (!isSupportedProfileMediaFile(file)) {
         sourceImage = null;
@@ -1165,43 +1295,58 @@ export function buildAccountTab(
         renderStage();
         return;
       }
-      if (objectUrl !== null) {
-        URL.revokeObjectURL(objectUrl);
-        objectUrl = null;
-      }
-      objectUrl = URL.createObjectURL(file);
-      const image = new Image();
-      image.onload = () => {
-        sourceImage = image;
-        minZoom = Math.max(previewWidth / image.naturalWidth, previewHeight / image.naturalHeight);
-        maxZoom = Math.max(minZoom * 4, minZoom + 0.2);
-        zoom = minZoom;
-        offsetX = (previewWidth - image.naturalWidth * zoom) / 2;
-        offsetY = (previewHeight - image.naturalHeight * zoom) / 2;
-        zoomInput.min = String(minZoom);
-        zoomInput.max = String(maxZoom);
-        zoomInput.value = String(zoom);
-        clampOffsets();
-        updateZoomDisplay();
-        renderStage();
-        saveBtn.disabled = false;
-      };
-      image.onerror = () => {
+      setText(fileName, file.name);
+      setText(modalError, "");
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        if (modalSignal.signal.aborted || currentLoadId !== fileLoadSequence || dataUrl.trim() === "") {
+          return;
+        }
+        const image = new Image();
+        image.onload = () => {
+          if (modalSignal.signal.aborted || currentLoadId !== fileLoadSequence) {
+            return;
+          }
+          sourceImage = image;
+          minZoom = Math.max(previewWidth / image.naturalWidth, previewHeight / image.naturalHeight);
+          maxZoom = Math.max(minZoom * 4, minZoom + 0.2);
+          zoom = minZoom;
+          offsetX = (previewWidth - image.naturalWidth * zoom) / 2;
+          offsetY = (previewHeight - image.naturalHeight * zoom) / 2;
+          zoomInput.min = String(minZoom);
+          zoomInput.max = String(maxZoom);
+          zoomInput.value = String(zoom);
+          clampOffsets();
+          updateZoomDisplay();
+          renderStage();
+          saveBtn.disabled = false;
+        };
+        image.onerror = () => {
+          if (modalSignal.signal.aborted || currentLoadId !== fileLoadSequence) {
+            return;
+          }
+          sourceImage = null;
+          saveBtn.disabled = true;
+          setText(modalError, "Не удалось открыть изображение.");
+          renderStage();
+        };
+        image.src = dataUrl;
+      } catch {
+        if (modalSignal.signal.aborted || currentLoadId !== fileLoadSequence) {
+          return;
+        }
         sourceImage = null;
         saveBtn.disabled = true;
         setText(modalError, "Не удалось открыть изображение.");
         renderStage();
-      };
-      image.src = objectUrl;
-      setText(fileName, file.name);
-      setText(modalError, "");
+      }
     }
 
     pickFileBtn.addEventListener("click", () => hiddenInput.click(), { signal: modalSignal.signal });
     hiddenInput.addEventListener("change", () => {
       const selected = hiddenInput.files?.[0];
       if (selected !== undefined) {
-        loadFile(selected);
+        void loadFile(selected);
       }
       hiddenInput.value = "";
     }, { signal: modalSignal.signal });
@@ -1447,6 +1592,147 @@ export function buildAccountTab(
     modalShell.body.appendChild(footer);
   }
 
+  function openDefaultBannerModal(): void {
+    const modalShell = buildModalShell("Стандартные обложки");
+    const modalSignal = new AbortController();
+    const closeModal = (): void => {
+      modalSignal.abort();
+      modalShell.close();
+    };
+    const status = createElement("div", { class: "account-default-avatars-state" }, "Загрузка списка обложек...");
+    const error = createElement("div", { class: "account-default-avatars-error" });
+    const groups = createElement("div", { class: "account-default-avatars-groups" });
+    let selectedCategory: string | null = null;
+    let selectedBannerName: string | null = null;
+    let selectedPreviewUrl: string | null = null;
+    let selectedButton: HTMLButtonElement | null = null;
+    appendChildren(modalShell.body, status, error, groups);
+
+    const renderPreview = (target: HTMLDivElement, previewUrl: string): void => {
+      const resolved = resolveServerUrl(previewUrl);
+      if (!isSafeUrl(resolved)) {
+        setText(target, "Нет превью");
+        return;
+      }
+      void fetchImageAsDataUrl(resolved).then((dataUrl) => {
+        if (modalSignal.signal.aborted) {
+          return;
+        }
+        clearChildren(target);
+        if (dataUrl === null || dataUrl.trim() === "") {
+          setText(target, "Нет превью");
+          return;
+        }
+        const image = createElement("img", {
+          class: "account-default-avatar-image", // Re-using styling class
+          src: dataUrl,
+          alt: "banner preview",
+        });
+        target.appendChild(image);
+      }).catch(() => {
+        if (!modalSignal.signal.aborted) {
+          setText(target, "Нет превью");
+        }
+      });
+    };
+
+    const setSelectedBanner = (
+      button: HTMLButtonElement,
+      category: string,
+      bannerName: string,
+      previewUrl: string,
+      saveBtn: HTMLButtonElement,
+    ): void => {
+      if (selectedButton !== null) {
+        selectedButton.classList.remove("selected");
+      }
+      selectedButton = button;
+      selectedButton.classList.add("selected");
+      selectedCategory = category;
+      selectedBannerName = bannerName;
+      selectedPreviewUrl = previewUrl;
+      saveBtn.disabled = false;
+      setText(error, "");
+    };
+
+    void ensureDefaultBannerCatalog().then((categories) => {
+      if (modalSignal.signal.aborted) {
+        return;
+      }
+      clearChildren(groups);
+      setText(error, "");
+      if (categories.length === 0) {
+        setText(status, "В каталоге Banners пока нет доступных изображений.");
+        return;
+      }
+      status.style.display = "none";
+
+      for (const category of categories) {
+        const group = createElement("div", { class: "account-default-avatar-group" });
+        const groupTitle = createElement("div", { class: "account-default-avatar-group-title" }, category.name);
+        const grid = createElement("div", { class: "account-default-avatar-grid" });
+        for (const bannerEntry of category.avatars) { // Note: avatars field reused for generic catalog items
+          const button = createElement("button", {
+            class: "account-default-avatar-item",
+            type: "button",
+            title: `${category.name}: ${bannerEntry.name}`,
+          }) as HTMLButtonElement;
+          const previewWrap = createElement("div", { class: "account-default-avatar-preview-wrap" });
+          const label = createElement("div", { class: "account-default-avatar-name" }, bannerEntry.name);
+          renderPreview(previewWrap, bannerEntry.preview_url);
+          button.addEventListener("click", () => {
+            setSelectedBanner(
+              button,
+              category.name,
+              bannerEntry.name,
+              bannerEntry.preview_url,
+              saveBtn,
+            );
+          }, { signal: modalSignal.signal });
+          appendChildren(button, previewWrap, label);
+          grid.appendChild(button);
+        }
+        appendChildren(group, groupTitle, grid);
+        groups.appendChild(group);
+      }
+    }).catch((err: unknown) => {
+      if (modalSignal.signal.aborted) {
+        return;
+      }
+      setText(status, "Не удалось загрузить стандартные обложки.");
+      setText(error, err instanceof Error ? err.message : "Ошибка загрузки обложек.");
+    });
+
+    const footer = createElement("div", { class: "account-media-modal-actions" });
+    const closeBtn = createElement("button", {
+      class: "ac-btn",
+      type: "button",
+      style: "background:var(--bg-active);margin-left:0;",
+    }, "Закрыть");
+    const saveBtn = createElement("button", {
+      class: "ac-btn",
+      type: "button",
+      style: "margin-left:0;",
+    }, "Сохранить") as HTMLButtonElement;
+    saveBtn.disabled = true;
+    closeBtn.addEventListener("click", closeModal, { signal: modalSignal.signal });
+    saveBtn.addEventListener("click", () => {
+      if (selectedCategory === null || selectedBannerName === null || selectedPreviewUrl === null) {
+        return;
+      }
+      saveBtn.disabled = true;
+      closeBtn.disabled = true;
+      void selectDefaultBannerRaw(selectedCategory, selectedBannerName, selectedPreviewUrl).then(() => {
+        closeModal();
+      }).catch(() => {
+        saveBtn.disabled = false;
+        closeBtn.disabled = false;
+      });
+    }, { signal: modalSignal.signal });
+    appendChildren(footer, closeBtn, saveBtn);
+    modalShell.body.appendChild(footer);
+  }
+
   function openAvatarChooserModal(): void {
     const modalShell = buildModalShell("Выбор аватара");
     const chooserText = createElement("div", { class: "account-media-modal-note" },
@@ -1487,11 +1773,218 @@ export function buildAccountTab(
     openAvatarChooserModal();
   }, { signal });
 
+  function openBannerColorPickerModal(): void {
+    const modalShell = buildModalShell("Выбрать цвет обложки");
+    const modalSignal = new AbortController();
+    const closeModal = (): void => {
+      modalSignal.abort();
+      modalShell.close();
+    };
+
+    const description = createElement("div", { class: "account-media-modal-note" },
+      "Выберите готовый цвет или введите свой HEX-код.");
+
+    // Preset color grid
+    const presetsGrid = createElement("div", { class: "banner-color-presets" });
+    let selectedColor: string | null = null;
+    let selectedSwatch: HTMLButtonElement | null = null;
+
+    // Detect current banner color if any
+    const currentBanner = authStore.getState().user?.banner ?? banner;
+    const currentBannerColor = isBannerColor(currentBanner) ? parseBannerColor(currentBanner!) : null;
+
+    for (const color of BANNER_PRESET_COLORS) {
+      const swatch = createElement("button", {
+        class: "banner-color-swatch",
+        type: "button",
+        title: color,
+        "aria-label": `Цвет ${color}`,
+      }) as HTMLButtonElement;
+      swatch.style.background = color;
+      if (currentBannerColor !== null && currentBannerColor.toLowerCase() === color.toLowerCase()) {
+        swatch.classList.add("active");
+        selectedSwatch = swatch;
+        selectedColor = color;
+      }
+      swatch.addEventListener("click", () => {
+        if (selectedSwatch !== null) {
+          selectedSwatch.classList.remove("active");
+        }
+        swatch.classList.add("active");
+        selectedSwatch = swatch;
+        selectedColor = color;
+        hexInput.value = color.replace(/^#/, "");
+        previewBox.style.background = color;
+        saveBtnEl.disabled = false;
+      }, { signal: modalSignal.signal });
+      presetsGrid.appendChild(swatch);
+    }
+
+    // Custom hex input row
+    const customRow = createElement("div", { class: "banner-color-custom-row" });
+    const hexLabel = createElement("div", { class: "banner-color-hex-label" }, "Или свой цвет:");
+    const hexInputWrap = createElement("div", { class: "accent-hex-row" });
+    const hexPrefix = createElement("span", { class: "accent-hex-prefix" }, "#");
+    const hexInput = createElement("input", {
+      class: "form-input",
+      type: "text",
+      maxlength: "6",
+      placeholder: "5865f2",
+      style: "width:120px;font-family:monospace;font-size:14px;",
+    }) as HTMLInputElement;
+    if (currentBannerColor !== null) {
+      hexInput.value = currentBannerColor.replace(/^#/, "");
+    }
+    appendChildren(hexInputWrap, hexPrefix, hexInput);
+
+    // Preview
+    const previewBox = createElement("div", { class: "banner-color-preview" });
+    if (currentBannerColor !== null) {
+      previewBox.style.background = currentBannerColor;
+    } else {
+      previewBox.style.background = "var(--accent)";
+    }
+    appendChildren(customRow, hexLabel, hexInputWrap, previewBox);
+
+    hexInput.addEventListener("input", () => {
+      const raw = hexInput.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6);
+      hexInput.value = raw;
+      if (raw.length === 3 || raw.length === 6) {
+        const color = `#${raw}`;
+        previewBox.style.background = color;
+        selectedColor = color.length === 4
+          ? `#${raw[0]}${raw[0]}${raw[1]}${raw[1]}${raw[2]}${raw[2]}`
+          : color;
+        // Deselect preset swatch
+        if (selectedSwatch !== null) {
+          selectedSwatch.classList.remove("active");
+          selectedSwatch = null;
+        }
+        // Auto-select matching preset if exists
+        const fullHex = selectedColor.toLowerCase();
+        const presetBtn = presetsGrid.querySelector(
+          `button[title="${fullHex}"]`,
+        ) as HTMLButtonElement | null;
+        if (presetBtn !== null) {
+          presetBtn.classList.add("active");
+          selectedSwatch = presetBtn;
+        }
+        saveBtnEl.disabled = false;
+      } else {
+        saveBtnEl.disabled = true;
+      }
+    }, { signal: modalSignal.signal });
+
+    // Error
+    const modalError = createElement("div", { class: "account-media-modal-error" });
+
+    // Actions
+    const actionRow = createElement("div", { class: "account-media-modal-actions" });
+    const cancelBtnEl = createElement("button", {
+      class: "ac-btn",
+      type: "button",
+      style: "background:var(--bg-active);margin-left:0;",
+    }, "Отмена");
+    const saveBtnEl = createElement("button", {
+      class: "ac-btn",
+      type: "button",
+      style: "margin-left:0;",
+    }, "Сохранить") as HTMLButtonElement;
+    saveBtnEl.disabled = selectedColor === null;
+
+    cancelBtnEl.addEventListener("click", closeModal, { signal: modalSignal.signal });
+    saveBtnEl.addEventListener("click", () => {
+      if (selectedColor === null) {
+        return;
+      }
+      // Normalize to full 6-char hex
+      let hex = selectedColor;
+      if (/^#[0-9a-fA-F]{3}$/.test(hex)) {
+        const r = hex[1], g = hex[2], b = hex[3];
+        hex = `#${r}${r}${g}${g}${b}${b}`;
+      }
+      const bannerValue = `${BANNER_COLOR_PREFIX}${hex}`;
+      saveBtnEl.disabled = true;
+      cancelBtnEl.disabled = true;
+      setText(saveBtnEl, "Сохранение...");
+      setText(modalError, "");
+      void options.onUpdateProfile({ banner: bannerValue }).then(() => {
+        syncProfilePreviewWithStore({ banner: bannerValue });
+        closeModal();
+      }).catch((err: unknown) => {
+        setText(modalError, err instanceof Error ? err.message : "Не удалось сохранить цвет обложки.");
+        saveBtnEl.disabled = false;
+        cancelBtnEl.disabled = false;
+        setText(saveBtnEl, "Сохранить");
+      });
+    }, { signal: modalSignal.signal });
+
+    appendChildren(actionRow, cancelBtnEl, saveBtnEl);
+    appendChildren(modalShell.body, description, presetsGrid, customRow, modalError, actionRow);
+  }
+
+  function openBannerChooserModal(): void {
+    const modalShell = buildModalShell("Изменить обложку");
+    const chooserText = createElement("div", { class: "account-media-modal-note" },
+      "Выберите способ: залить цветом или загрузить своё изображение.");
+    const chooserGrid = createElement("div", { class: "account-avatar-choice-grid" });
+
+    const chooseColorBtn = createElement("button", {
+      class: "account-avatar-choice-btn banner-choice-color-btn",
+      type: "button",
+    });
+    const colorIcon = createElement("div", { class: "banner-choice-icon" });
+    // Small color swatch row inside the button
+    const colorSwatches = createElement("div", { class: "banner-choice-mini-swatches" });
+    for (const c of BANNER_PRESET_COLORS.slice(0, 6)) {
+      const dot = createElement("div", { class: "banner-choice-mini-dot" });
+      dot.style.background = c;
+      colorSwatches.appendChild(dot);
+    }
+    colorIcon.appendChild(colorSwatches);
+    const colorLabel = createElement("div", { class: "banner-choice-label" }, "Выбрать цвет");
+    appendChildren(chooseColorBtn, colorIcon, colorLabel);
+
+    const uploadImageBtn = createElement("button", {
+      class: "account-avatar-choice-btn",
+      type: "button",
+    }, "Загрузить изображение");
+
+    const chooseStandardBtn = createElement("button", {
+      class: "account-avatar-choice-btn",
+      type: "button",
+      style: "grid-column: span 2;",
+    }, "Выбрать стандартную обложку");
+
+    const closeBtnEl = createElement("button", {
+      class: "ac-btn",
+      type: "button",
+      style: "background:var(--bg-active);margin-left:0;margin-top:12px;",
+    }, "Отмена");
+
+    chooseColorBtn.addEventListener("click", () => {
+      modalShell.close();
+      openBannerColorPickerModal();
+    }, { signal });
+    uploadImageBtn.addEventListener("click", () => {
+      modalShell.close();
+      openCropModal("banner");
+    }, { signal });
+    chooseStandardBtn.addEventListener("click", () => {
+      modalShell.close();
+      openDefaultBannerModal();
+    }, { signal });
+    closeBtnEl.addEventListener("click", () => modalShell.close(), { signal });
+
+    appendChildren(chooserGrid, chooseColorBtn, uploadImageBtn, chooseStandardBtn);
+    appendChildren(modalShell.body, chooserText, chooserGrid, closeBtnEl);
+  }
+
   bannerEditBtn.addEventListener("click", () => {
     if (bannerEditBtn.disabled) {
       return;
     }
-    openCropModal("banner");
+    openBannerChooserModal();
   }, { signal });
 
   syncMediaControlsAvailability();

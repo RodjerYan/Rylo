@@ -96,6 +96,7 @@ function mapDmPayload(p: DmChannelPayload): DmChannel {
     channelId: p.channel_id,
     recipient: {
       id: p.recipient.id,
+      profileId: p.recipient.profile_id,
       username: p.recipient.username,
       avatar: p.recipient.avatar,
       status: p.recipient.status,

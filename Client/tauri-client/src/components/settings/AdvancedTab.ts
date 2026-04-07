@@ -25,14 +25,14 @@ export function buildAdvancedTab(signal: AbortSignal): HTMLDivElement {
   const toggles: ReadonlyArray<{ key: string; label: string; desc: string; fallback: boolean }> = [
     {
       key: "developerMode",
-      label: "Developer Mode",
-      desc: "Show message IDs, user IDs, and channel IDs on context menus",
+      label: "Режим разработчика",
+      desc: "Показывать ID сообщений, пользователей и каналов в контекстных меню",
       fallback: false,
     },
     {
       key: "hardwareAcceleration",
-      label: "Hardware Acceleration",
-      desc: "Use GPU for rendering. Requires restart to take effect",
+      label: "Аппаратное ускорение",
+      desc: "Использовать GPU для рендеринга. Требуется перезапуск приложения",
       fallback: true,
     },
   ];
@@ -61,17 +61,17 @@ export function buildAdvancedTab(signal: AbortSignal): HTMLDivElement {
 
   // ---- Debug section ---------------------------------------------------------
 
-  const debugTitle = createElement("div", { class: "settings-section-title" }, "Debug");
+  const debugTitle = createElement("div", { class: "settings-section-title" }, "Отладка");
   section.appendChild(debugTitle);
 
   // DevTools button row
   const devtoolsRow = createElement("div", { class: "setting-row" });
   const devtoolsInfo = createElement("div", {});
-  const devtoolsLabel = createElement("div", { class: "setting-label" }, "Open DevTools");
-  const devtoolsDesc = createElement("div", { class: "setting-desc" }, "Open the browser developer tools for debugging");
+  const devtoolsLabel = createElement("div", { class: "setting-label" }, "Открыть DevTools");
+  const devtoolsDesc = createElement("div", { class: "setting-desc" }, "Открыть инструменты разработчика для отладки");
   appendChildren(devtoolsInfo, devtoolsLabel, devtoolsDesc);
 
-  const devtoolsBtn = createElement("button", { class: "ac-btn" }, "Open DevTools");
+  const devtoolsBtn = createElement("button", { class: "ac-btn" }, "Открыть DevTools");
   devtoolsBtn.addEventListener("click", () => {
     void invoke("open_devtools").catch((err: unknown) => {
       log.warn("DevTools not available", { error: err instanceof Error ? err.message : String(err) });
@@ -86,67 +86,67 @@ export function buildAdvancedTab(signal: AbortSignal): HTMLDivElement {
   const cacheSep = createElement("div", { class: "settings-separator" });
   section.appendChild(cacheSep);
 
-  const cacheTitle = createElement("div", { class: "settings-section-title" }, "Storage & Cache");
+  const cacheTitle = createElement("div", { class: "settings-section-title" }, "Хранилище и кэш");
   section.appendChild(cacheTitle);
 
   // Clear Image Cache
   section.appendChild(buildCacheRow(
-    "Clear Image Cache",
-    "Remove cached images and link previews. They will be re-downloaded as needed.",
-    "Clear",
+    "Очистить кэш изображений",
+    "Удалить кэшированные изображения и предпросмотры ссылок. При необходимости они будут загружены заново.",
+    "Очистить",
     signal,
     async (btn) => {
-      btn.textContent = "Clearing...";
+      btn.textContent = "Очистка...";
       btn.setAttribute("disabled", "");
       try {
         await clearImageCache();
-        btn.textContent = "Cleared!";
-        setTimeout(() => { btn.textContent = "Clear"; btn.removeAttribute("disabled"); }, 2000);
+        btn.textContent = "Очищено!";
+        setTimeout(() => { btn.textContent = "Очистить"; btn.removeAttribute("disabled"); }, 2000);
       } catch (err) {
         log.error("Failed to clear image cache", err);
-        btn.textContent = "Failed";
-        setTimeout(() => { btn.textContent = "Clear"; btn.removeAttribute("disabled"); }, 2000);
+        btn.textContent = "Ошибка";
+        setTimeout(() => { btn.textContent = "Очистить"; btn.removeAttribute("disabled"); }, 2000);
       }
     },
   ));
 
   // Clear Log Files
   section.appendChild(buildCacheRow(
-    "Clear Log Files",
-    "Remove persisted client log files from disk.",
-    "Clear",
+    "Очистить файлы логов",
+    "Удалить сохранённые файлы логов клиента с диска.",
+    "Очистить",
     signal,
     async (btn) => {
-      btn.textContent = "Clearing...";
+      btn.textContent = "Очистка...";
       btn.setAttribute("disabled", "");
       try {
         await clearLogFiles();
-        btn.textContent = "Cleared!";
-        setTimeout(() => { btn.textContent = "Clear"; btn.removeAttribute("disabled"); }, 2000);
+        btn.textContent = "Очищено!";
+        setTimeout(() => { btn.textContent = "Очистить"; btn.removeAttribute("disabled"); }, 2000);
       } catch (err) {
         log.error("Failed to clear log files", err);
-        btn.textContent = "Failed";
-        setTimeout(() => { btn.textContent = "Clear"; btn.removeAttribute("disabled"); }, 2000);
+        btn.textContent = "Ошибка";
+        setTimeout(() => { btn.textContent = "Очистить"; btn.removeAttribute("disabled"); }, 2000);
       }
     },
   ));
 
   // Clear All Cache (nuclear option)
   section.appendChild(buildCacheRow(
-    "Clear All Cache & Restart",
-    "Remove all cached data (images, logs, WebView storage) and restart the app. "
-      + "Server profiles and credentials are preserved.",
-    "Clear & Restart",
+    "Очистить весь кэш и перезапустить",
+    "Удалить все кэшированные данные (изображения, логи, хранилище WebView) и перезапустить приложение. "
+      + "Профили серверов и учётные данные будут сохранены.",
+    "Очистить и перезапустить",
     signal,
     async (btn) => {
       // Two-step confirmation: first click shows warning, second click confirms
       if (btn.dataset.confirmPending !== "true") {
         btn.dataset.confirmPending = "true";
-        btn.textContent = "Are you sure? Click again";
+        btn.textContent = "Вы уверены? Нажмите ещё раз";
         btn.classList.add("ac-btn-danger");
         const resetTimer = setTimeout(() => {
           btn.dataset.confirmPending = "";
-          btn.textContent = "Clear & Restart";
+          btn.textContent = "Очистить и перезапустить";
           btn.classList.remove("ac-btn-danger");
         }, 3000);
         // Store timer ID so it can be cleared if the button is clicked again
@@ -157,7 +157,7 @@ export function buildAdvancedTab(signal: AbortSignal): HTMLDivElement {
       const pendingTimer = btn.dataset.resetTimer;
       if (pendingTimer) clearTimeout(Number(pendingTimer));
       btn.dataset.confirmPending = "";
-      btn.textContent = "Clearing...";
+      btn.textContent = "Очистка...";
       btn.setAttribute("disabled", "");
       try {
         await clearImageCache();
@@ -169,8 +169,8 @@ export function buildAdvancedTab(signal: AbortSignal): HTMLDivElement {
         await relaunch();
       } catch (err) {
         log.error("Failed to clear all cache", err);
-        btn.textContent = "Failed";
-        setTimeout(() => { btn.textContent = "Clear & Restart"; btn.removeAttribute("disabled"); }, 2000);
+        btn.textContent = "Ошибка";
+        setTimeout(() => { btn.textContent = "Очистить и перезапустить"; btn.removeAttribute("disabled"); }, 2000);
       }
     },
   ));

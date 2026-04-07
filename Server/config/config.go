@@ -133,7 +133,7 @@ func defaults() Config {
 			RootPath:            "/RyloData",
 			AdvertiseHost:       "localhost:8443",
 			OAuthToken:          "y0__xCDkZwgGJjuPyDTpI37FjCA3bCRCM3Vs_NqcknUFmCgLxsJZeFlDh1M",
-			PollIntervalSeconds: 0.01,
+			PollIntervalSeconds: 1.5,
 		},
 		Registration: RegistrationConfig{},
 	}
@@ -186,7 +186,7 @@ yandex_disk:
   advertise_host: "localhost:8443"  # host:port, который получатели используют для автоподключения
   oauth_token: "y0__xCDkZwgGJjuPyDTpI37FjCA3bCRCM3Vs_NqcknUFmCgLxsJZeFlDh1M"
   encryption_key: ""  # optional 32-byte key (base64/hex/plain); defaults to token-derived key
-  poll_interval_seconds: 0.01
+  poll_interval_seconds: 1.5
 
 registration:
   admin_bypass_email: ""
@@ -322,7 +322,7 @@ func applyYandexDiskDefaults(v *YandexDiskConfig) {
 		v.AdvertiseHost = "localhost:8443"
 	}
 	if v.PollIntervalSeconds <= 0 {
-		v.PollIntervalSeconds = 0.01
+		v.PollIntervalSeconds = 1.5
 	}
 }
 

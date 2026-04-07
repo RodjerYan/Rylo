@@ -107,6 +107,7 @@ function createMemberItem(
   item.addEventListener("click", () => {
     openUserProfile({
       id: member.id,
+      profileId: member.profileId,
       username: member.username,
       avatar: member.avatar,
       status: member.status,

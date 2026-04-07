@@ -319,11 +319,14 @@ func authenticateConn(conn *websocket.Conn, database *db.DB) (*db.User, string, 
 }
 
 // buildAuthOK constructs the auth_ok server→client message.
-// Per PROTOCOL.md, user object contains only id, username, avatar, role (no status).
 func (h *Hub) buildAuthOK(user *db.User, roleName string) []byte {
 	var avatarVal any
 	if user.Avatar != nil {
 		avatarVal = *user.Avatar
+	}
+	var bannerVal any
+	if user.Banner != nil {
+		bannerVal = *user.Banner
 	}
 
 	serverName, motd := h.getCachedSettings()
@@ -332,10 +335,12 @@ func (h *Hub) buildAuthOK(user *db.User, roleName string) []byte {
 		"type": MsgTypeAuthOK,
 		"payload": map[string]any{
 			"user": map[string]any{
-				"id":       user.ID,
-				"username": user.Username,
-				"avatar":   avatarVal,
-				"role":     roleName,
+				"id":         user.ID,
+				"profile_id": db.FormatProfileID(user.ID),
+				"username":   user.Username,
+				"avatar":     avatarVal,
+				"banner":     bannerVal,
+				"role":       roleName,
 			},
 			"server_name": serverName,
 			"motd":        motd,

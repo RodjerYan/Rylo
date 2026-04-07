@@ -337,6 +337,22 @@ export function renderAttachment(att: Attachment): HTMLDivElement {
 
     return wrap;
   }
+
+  // Telegram-like basic audio player render
+  if (att.mime.startsWith("audio/")) {
+    const wrap = createElement("div", { 
+      class: "msg-audio", 
+      style: "border-radius: 20px; background: var(--bg-modifier-hover); padding: 6px 12px; display: flex; align-items: center; gap: 8px; max-width: 320px; margin-top: 4px;" 
+    });
+    const audio = createElement("audio", {
+      controls: "true",
+      src: resolvedUrl,
+      style: "height: 36px; outline: none; width: 100%;",
+    });
+    wrap.appendChild(audio);
+    return wrap;
+  }
+
   const wrap = createElement("div", { class: "msg-file" });
   const inner = createElement("div", { class: "msg-file-inner" });
   const icon = createElement("div", { class: "msg-file-icon" });

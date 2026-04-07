@@ -67,7 +67,7 @@ type updateProfileRequest struct {
 // userResponse is the user shape included in auth responses.
 type userResponse struct {
 	ID          int64  `json:"id"`
-	ProfileID   int64  `json:"profile_id"`
+	ProfileID   string `json:"profile_id"`
 	Username    string `json:"username"`
 	Avatar      string `json:"avatar,omitempty"`
 	Banner      string `json:"banner,omitempty"`
@@ -757,7 +757,7 @@ func handleUpdateProfile(database *db.DB, replicator *replication.Replicator) ht
 			})
 			return
 		}
-		banner, bannerAttachmentID, err := normalizeProfileMediaURL(req.Banner)
+		banner, bannerAttachmentID, err := normalizeBannerValue(req.Banner)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, errorResponse{
 				Error:   "INVALID_INPUT",
@@ -945,7 +945,7 @@ func toUserResponse(u *db.User) *userResponse {
 	}
 	resp := &userResponse{
 		ID:          u.ID,
-		ProfileID:   u.ID,
+		ProfileID:   db.FormatProfileID(u.ID),
 		Username:    u.Username,
 		Avatar:      avatar,
 		Banner:      banner,
@@ -1059,6 +1059,46 @@ func normalizeProfileMediaURL(raw *string) (*string, string, error) {
 
 	normalized := filePrefix + attachmentID
 	return &normalized, attachmentID, nil
+}
+
+// normalizeBannerValue extends normalizeProfileMediaURL to also accept
+// solid-color banners stored as "color:#hex" (e.g. "color:#5865f2").
+func normalizeBannerValue(raw *string) (*string, string, error) {
+	if raw == nil {
+		return nil, "", nil
+	}
+	value := strings.TrimSpace(*raw)
+	if value == "" {
+		return &value, "", nil
+	}
+	// Accept color-prefixed banners: "color:#hex"
+	if strings.HasPrefix(value, "color:") {
+		hex := strings.TrimSpace(value[len("color:"):])
+		if isValidHexColor(hex) {
+			normalized := "color:" + hex
+			return &normalized, "", nil
+		}
+		return nil, "", fmt.Errorf("invalid banner color value")
+	}
+	// Fall back to normal file-URL validation.
+	return normalizeProfileMediaURL(raw)
+}
+
+// isValidHexColor checks that s is a valid #RGB or #RRGGBB hex color.
+func isValidHexColor(s string) bool {
+	if len(s) == 0 || s[0] != '#' {
+		return false
+	}
+	hex := s[1:]
+	if len(hex) != 3 && len(hex) != 6 {
+		return false
+	}
+	for _, c := range hex {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func isAllowedProfileMediaRune(r rune) bool {
