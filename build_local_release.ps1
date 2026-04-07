@@ -26,8 +26,8 @@ npm run tauri build
 Set-Location ../../
 
 Write-Host "Copying Client Artifacts..."
-if (Test-Path "Client/tauri-client/src-tauri/target/release/rylo-client.exe") {
-    Copy-Item "Client/tauri-client/src-tauri/target/release/rylo-client.exe" -Destination "Release/"
+if (Test-Path "Client/tauri-client/src-tauri/target/release/Rylo-Selection.exe") {
+    Copy-Item "Client/tauri-client/src-tauri/target/release/Rylo-Selection.exe" -Destination "Release/"
 }
 
 $installer = Get-ChildItem -Path "Client/tauri-client/src-tauri/target/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1

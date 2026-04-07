@@ -48,6 +48,13 @@ export function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatDuration(seconds: number): string {
+  if (isNaN(seconds) || !isFinite(seconds)) return "0:00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 export function isImageMime(mime: string): boolean {
   return mime.startsWith("image/");
 }
@@ -258,6 +265,139 @@ export function fetchImageAsDataUrl(url: string): Promise<string | null> {
   return promise;
 }
 
+/** Fetch audio as a Blob URL to bypass certificate issues and handle WebM duration. */
+async function fetchAudioAsBlobUrl(url: string): Promise<string | null> {
+  try {
+    const useInsecure = isTrustedServerUrl(url);
+    const fetchOpts: RequestInit = useInsecure
+      ? { danger: { acceptInvalidCerts: true, acceptInvalidHostnames: false } } as RequestInit
+      : {};
+    const res = await tauriFetch(url, fetchOpts);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  } catch (err) {
+    log.error("Failed to fetch audio as blob", { url, error: String(err) });
+    return null;
+  }
+}
+
+// -- Voice Message Player -----------------------------------------------------
+
+function renderVoiceMessage(att: Attachment, url: string): HTMLDivElement {
+  const container = createElement("div", { class: "msg-voice" });
+
+  const audio = createElement("audio", {
+    preload: "metadata",
+  }) as HTMLAudioElement;
+
+  const playBtn = createElement("div", { class: "voice-play-btn" });
+  playBtn.appendChild(createIcon("play", 20));
+
+  const content = createElement("div", { class: "voice-content" });
+
+  const trackWrap = createElement("div", { class: "voice-track-wrap" });
+  const waveform = createElement("div", { class: "voice-waveform" });
+  
+  // Create ~45 randomized bars for a premium look
+  const bars: HTMLDivElement[] = [];
+  for (let i = 0; i < 45; i++) {
+    const height = Math.floor(Math.random() * 70) + 20; // 20% to 90%
+    const bar = createElement("div", { 
+      class: "voice-bar",
+      style: `height: ${height}%;`
+    }) as HTMLDivElement;
+    waveform.appendChild(bar);
+    bars.push(bar);
+  }
+  trackWrap.appendChild(waveform);
+
+  const info = createElement("div", { class: "voice-info" });
+  const timeLabel = createElement("span", { 
+    style: "min-width: 40px; display: inline-block;" 
+  }, "...");
+  const nameLabel = createElement("span", { class: "voice-name" }, "Голосовое сообщение");
+  appendChildren(info, timeLabel, nameLabel);
+
+  appendChildren(content, trackWrap, info);
+  appendChildren(container, playBtn, content);
+
+  // Load audio via blob
+  void fetchAudioAsBlobUrl(url).then((blobUrl) => {
+    if (blobUrl) {
+      audio.src = blobUrl;
+      timeLabel.textContent = "0:00";
+    } else {
+      timeLabel.textContent = "Ошибка";
+      playBtn.style.opacity = "0.5";
+    }
+  });
+
+  let isPlaying = false;
+
+  const updateBars = (currentTime: number) => {
+    if (!audio.duration || !isFinite(audio.duration)) return;
+    const progress = currentTime / audio.duration;
+    const activeIndex = Math.floor(progress * bars.length);
+    bars.forEach((bar, j) => {
+      if (j <= activeIndex) {
+        bar.classList.add("active");
+      } else {
+        bar.classList.remove("active");
+      }
+    });
+  };
+
+  playBtn.addEventListener("click", () => {
+    if (!audio.src) return;
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      audio.play().catch(console.error);
+    }
+  });
+
+  audio.addEventListener("play", () => {
+    isPlaying = true;
+    playBtn.innerHTML = "";
+    playBtn.appendChild(createIcon("pause", 20));
+  });
+
+  audio.addEventListener("pause", () => {
+    isPlaying = false;
+    playBtn.innerHTML = "";
+    playBtn.appendChild(createIcon("play", 20));
+  });
+
+  audio.addEventListener("timeupdate", () => {
+    if (!audio.duration || !isFinite(audio.duration)) return;
+    timeLabel.textContent = formatDuration(audio.currentTime);
+    updateBars(audio.currentTime);
+  });
+
+  audio.addEventListener("loadedmetadata", () => {
+    if (isFinite(audio.duration)) {
+      timeLabel.textContent = formatDuration(audio.duration);
+    }
+  });
+
+  audio.addEventListener("ended", () => {
+    audio.currentTime = 0;
+    audio.pause();
+    updateBars(0);
+  });
+
+  trackWrap.addEventListener("click", (e) => {
+    if (!audio.src || !isFinite(audio.duration)) return;
+    const rect = waveform.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pct = Math.max(0, Math.min(1, x / rect.width));
+    audio.currentTime = pct * audio.duration;
+  });
+
+  return container;
+}
+
 // -- Attachment rendering -----------------------------------------------------
 
 export function renderAttachment(att: Attachment): HTMLDivElement {
@@ -338,19 +478,12 @@ export function renderAttachment(att: Attachment): HTMLDivElement {
     return wrap;
   }
 
-  // Telegram-like basic audio player render
-  if (att.mime.startsWith("audio/")) {
-    const wrap = createElement("div", { 
-      class: "msg-audio", 
-      style: "border-radius: 20px; background: var(--bg-modifier-hover); padding: 6px 12px; display: flex; align-items: center; gap: 8px; max-width: 320px; margin-top: 4px;" 
-    });
-    const audio = createElement("audio", {
-      controls: "true",
-      src: resolvedUrl,
-      style: "height: 36px; outline: none; width: 100%;",
-    });
-    wrap.appendChild(audio);
-    return wrap;
+  // Premium voice message player
+  const isWebm = att.mime === "audio/webm" || att.mime === "video/webm";
+  const isVoiceFilename = att.filename.toLowerCase().includes("voice message");
+  
+  if ((isWebm && isVoiceFilename) || att.mime.startsWith("audio/")) {
+    return renderVoiceMessage(att, resolvedUrl);
   }
 
   const wrap = createElement("div", { class: "msg-file" });

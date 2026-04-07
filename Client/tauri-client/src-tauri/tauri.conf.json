@@ -1,6 +1,6 @@
 {
-    "productName":  "Rylo",
-    "version":  "1.0.13",
+    "productName":  "Rylo-Selection",
+    "version":  "1.0.14",
     "identifier":  "com.rylo.client",
     "build":  {
                   "frontendDist":  "../dist",

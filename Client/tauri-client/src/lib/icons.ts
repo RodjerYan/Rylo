@@ -60,7 +60,10 @@ export type IconName =
   | "image"
   | "signal"
   | "log-out"
-  | "zap";
+  | "zap"
+  | "check-square"
+  | "corner-up-right"
+  | "forward";
 
 // ---------------------------------------------------------------------------
 // SVG inner content (innerHTML) — Lucide 0.x path data
@@ -202,6 +205,15 @@ const ICON_PATHS: Record<IconName, string> = {
 
   // Lightning bolt (auto-login indicator)
   zap: `<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>`,
+
+  // Checkbox with checkmark (for message selection)
+  "check-square": `<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>`,
+
+  // Corner up-right arrow (forward)
+  "corner-up-right": `<polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/>`,
+
+  // Forward arrow (alternative)
+  forward: `<polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>`,
 };
 
 // ---------------------------------------------------------------------------

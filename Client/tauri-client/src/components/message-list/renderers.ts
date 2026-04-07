@@ -14,6 +14,11 @@ import { loadPref } from "@components/settings/helpers";
 import type { Message } from "@stores/messages.store";
 import type { MessageListOptions } from "../MessageList";
 import { openUserProfileById } from "@components/UserProfileOverlay";
+import {
+  selectionStore,
+  toggleSelection,
+  startSelection,
+} from "@stores/selection.store";
 
 /** Cached value of the developerMode preference. Invalidated on pref change. */
 let developerModeEnabled = loadPref<boolean>("developerMode", false);
@@ -153,6 +158,7 @@ export function renderMessage(
   const el = createElement("div", {
     class: `${isGrouped ? "message grouped" : "message"}${isPending ? " pending" : ""}${msg.deleting ? " deleting" : ""}${msg.deleted ? " deleted" : ""}`,
     "data-testid": `message-${msg.id}`,
+    "data-msg-id": String(msg.id),
   });
 
   const role = getUserRole(msg.user.id);
@@ -182,6 +188,18 @@ export function renderMessage(
     }
   }
   avatar.addEventListener("click", () => {
+    const sel = selectionStore.getState();
+    if (sel.active) {
+      toggleSelection({
+        id: msg.id,
+        channelId: msg.channelId,
+        content: msg.content,
+        userId: msg.user.id,
+        username: msg.user.username,
+        attachments: msg.attachments,
+      });
+      return;
+    }
     openUserProfileById(msg.user.id);
   }, { signal });
   el.appendChild(avatar);
@@ -242,6 +260,38 @@ export function renderMessage(
 
   if (!msg.deleted && !msg.deleting && !isPending) {
     const actionsBar = createElement("div", { class: "msg-actions-bar" });
+
+    // Selection button — enters selection mode for this message
+    const selectBtn = createElement("button", {
+      "data-testid": `msg-select-${msg.id}`,
+      "aria-label": "Select message",
+    });
+    selectBtn.appendChild(createIcon("check-square", 16));
+    selectBtn.title = "Выбрать";
+    selectBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const sel = selectionStore.getState();
+      if (sel.active) {
+        toggleSelection({
+          id: msg.id,
+          channelId: msg.channelId,
+          content: msg.content,
+          userId: msg.user.id,
+          username: msg.user.username,
+          attachments: msg.attachments,
+        });
+      } else {
+        startSelection({
+          id: msg.id,
+          channelId: msg.channelId,
+          content: msg.content,
+          userId: msg.user.id,
+          username: msg.user.username,
+          attachments: msg.attachments,
+        });
+      }
+    }, { signal });
+    actionsBar.appendChild(selectBtn);
 
     const reactBtn = createElement("button", {
       "data-testid": `msg-react-${msg.id}`,
@@ -310,6 +360,73 @@ export function renderMessage(
     }
 
     el.appendChild(actionsBar);
+  }
+
+  // -- Selection overlay checkbox --
+  // Rendered only for real (non-pending, non-system) messages
+  if (!isPending) {
+    const selCheck = createElement("div", { class: "msg-sel-check" });
+    const checkInner = createElement("div", { class: "msg-sel-check-inner" });
+    selCheck.appendChild(checkInner);
+
+    // Subscribe to store and update classes
+    const unsubSel = selectionStore.subscribe((state) => {
+      if (signal.aborted) {
+        unsubSel();
+        return;
+      }
+      if (state.active) {
+        el.classList.add("selectable");
+        if (state.selectedIds.has(msg.id)) {
+          el.classList.add("msg-selected");
+          checkInner.classList.add("checked");
+        } else {
+          el.classList.remove("msg-selected");
+          checkInner.classList.remove("checked");
+        }
+      } else {
+        el.classList.remove("selectable", "msg-selected");
+        checkInner.classList.remove("checked");
+      }
+    });
+    signal.addEventListener("abort", () => unsubSel());
+
+    // Click on message row to toggle when in selection mode
+    el.addEventListener("click", (e) => {
+      const sel = selectionStore.getState();
+      if (!sel.active) return;
+      // Don't toggle if clicking action buttons
+      if ((e.target as HTMLElement).closest(".msg-actions-bar")) return;
+      e.stopPropagation();
+      toggleSelection({
+        id: msg.id,
+        channelId: msg.channelId,
+        content: msg.content,
+        userId: msg.user.id,
+        username: msg.user.username,
+        attachments: msg.attachments,
+      });
+    }, { signal });
+
+    // Right-click to enter selection mode (Telegram style)
+    el.addEventListener("contextmenu", (e) => {
+      const sel = selectionStore.getState();
+      if (sel.active) return; // Already in selection mode
+      
+      e.preventDefault();
+      e.stopPropagation();
+      
+      startSelection({
+        id: msg.id,
+        channelId: msg.channelId,
+        content: msg.content,
+        userId: msg.user.id,
+        username: msg.user.username,
+        attachments: msg.attachments,
+      });
+    }, { signal });
+
+    el.appendChild(selCheck);
   }
 
   return el;

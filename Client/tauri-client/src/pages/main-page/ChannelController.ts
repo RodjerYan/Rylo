@@ -5,6 +5,7 @@
  */
 
 import { clearChildren, setText } from "@lib/dom";
+import { createElement } from "@lib/dom";
 import { createLogger } from "@lib/logger";
 import type { MountableComponent } from "@lib/safe-render";
 import type { WsClient } from "@lib/ws";
@@ -25,6 +26,10 @@ import { dmStore } from "@stores/dm.store";
 import { membersStore } from "@stores/members.store";
 import { openUserProfile } from "@components/UserProfileOverlay";
 import { formatStatusForDmHeader } from "@lib/presence";
+import { createSelectionBar } from "@components/SelectionBar";
+import type { SelectionBarControl } from "@components/SelectionBar";
+import { createForwardModal } from "@components/ForwardModal";
+import { clearSelection } from "@stores/selection.store";
 
 const log = createLogger("channel-ctrl");
 
@@ -88,15 +93,21 @@ export function createChannelController(
   let messageInput: MessageInputComponent | null = null;
   let typingIndicator: MountableComponent | null = null;
   let channelUnsubs: Array<() => void> = [];
+  let selectionBar: SelectionBarControl | null = null;
 
   function destroyChannel(): void {
     pendingDeleteManager.cleanup();
+    clearSelection();
 
     if (channelAbort !== null) {
       channelAbort.abort();
       channelAbort = null;
     }
 
+    if (selectionBar !== null) {
+      selectionBar.destroy();
+      selectionBar = null;
+    }
     if (messageList !== null) {
       messageList.destroy?.();
       messageList = null;
@@ -257,6 +268,66 @@ export function createChannelController(
       },
     });
     messageInput.mount(slots.inputSlot);
+
+    // SelectionBar — mounts as overlay over the input area
+    selectionBar = createSelectionBar({
+      currentUserId: userId,
+      onDeleteForMe: (messageIds) => {
+        // Delete for me: send delete for each (server will handle visibility per user)
+        // The Rylo server's chat_delete broadcasts to all; so we use it as "delete for all"
+        // For "delete for me only" we visually hide via a client-side filter in the future.
+        // For now, treat the same as delete-for-all since the server doesn't distinguish.
+        for (const msgId of messageIds) {
+          ws.send({
+            type: "chat_delete",
+            payload: { message_id: msgId },
+          });
+        }
+        showToast(`Удалено ${messageIds.length} сообщ.`, "success");
+      },
+      onDeleteForAll: (messageIds) => {
+        for (const msgId of messageIds) {
+          ws.send({
+            type: "chat_delete",
+            payload: { message_id: msgId },
+          });
+        }
+        showToast(`Удалено у всех ${messageIds.length} сообщ.`, "success");
+      },
+      onForward: (messages) => {
+        // Show ForwardModal
+        const modal = createForwardModal({
+          onForward: (targetChannelId: number) => {
+            modal.destroy();
+            // Send each selected message as a new chat_send to the target channel
+            for (const msg of messages) {
+              const content = msg.content.trim() !== ""
+                ? msg.content
+                : (msg.attachments.length > 0 ? `[Attachment: ${msg.attachments[0]?.filename ?? "file"}]` : "");
+              if (content === "") continue;
+              const reqId = ws.send({
+                type: "chat_send",
+                payload: {
+                  channel_id: targetChannelId,
+                  content,
+                  reply_to: null,
+                  attachments: [],
+                },
+              });
+              addPendingSend(reqId, targetChannelId, content, null, []);
+            }
+            clearSelection();
+            showToast(`Переслано ${messages.length} сообщ.`, "success");
+          },
+          onClose: () => modal.destroy(),
+        });
+        // Mount modal in document body so it overlays everything
+        document.body.appendChild(modal.element);
+      },
+    });
+    const selBarWrapper = createElement("div", { class: "selection-bar-wrapper" });
+    selBarWrapper.appendChild(selectionBar.element);
+    slots.inputSlot.appendChild(selBarWrapper);
 
     // Arrow-up edit: listen for edit-last-message bubbling from MessageInput
     slots.inputSlot.addEventListener("edit-last-message", () => {

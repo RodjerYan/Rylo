@@ -378,17 +378,39 @@ export function createMessageInput(
       { class: "input-btn send-btn", "aria-label": "Voice message / Send", "data-testid": "send-btn" });
     sendBtn.appendChild(createIcon("mic", 20));
 
-    // Voice recording UI
+    // Voice recording UI (Premium redesigned)
     inputBox.style.position = "relative";
-    recordingOverlay = createElement("div", { 
-      style: "display: none; align-items: center; justify-content: space-between; flex: 1; padding: 0 16px; background: var(--bg-tertiary); border-radius: 8px; position: absolute; left: 0; top: 0; bottom: 0; right: 48px; z-index: 10;" 
-    });
-    const recordingLeft = createElement("div", { style: "display: flex; align-items: center; gap: 8px; color: var(--red);" });
-    const recordingDot = createElement("div", { style: "width: 10px; height: 10px; border-radius: 50%; background: var(--red); animation: pulse 1.5s infinite;" });
-    recordingTimeStr = createElement("span", {}, "0:00");
-    appendChildren(recordingLeft, recordingDot, recordingTimeStr);
-    const cancelText = createElement("span", { style: "color: var(--text-muted); font-size: 13px;" }, "Slide left to cancel <<");
-    appendChildren(recordingOverlay, recordingLeft, cancelText);
+    recordingOverlay = createElement("div", { class: "recording-ui", style: "display: none;" });
+    
+    const recordCancel = createElement("button", { class: "record-cancel", title: "Cancel recording" });
+    recordCancel.appendChild(createIcon("trash-2", 20));
+    recordCancel.addEventListener("click", () => {
+      canceled = true;
+      mediaRecorder?.stop();
+    }, { signal });
+
+    const recordCenter = createElement("div", { class: "record-center" });
+    const recordDot = createElement("div", { class: "record-dot" });
+    
+    const liveWaveform = createElement("div", { class: "record-waveform-live" });
+    const liveBars: HTMLDivElement[] = [];
+    for (let i = 0; i < 20; i++) {
+      const bar = createElement("div", { class: "record-live-bar" }) as HTMLDivElement;
+      liveWaveform.appendChild(bar);
+      liveBars.push(bar);
+    }
+
+    recordingTimeStr = createElement("span", { class: "record-timer" }, "0:00");
+    appendChildren(recordCenter, recordDot, liveWaveform, recordingTimeStr);
+
+    const recordConfirm = createElement("button", { class: "record-confirm", title: "Stop and Send" });
+    recordConfirm.appendChild(createIcon("check", 24));
+    recordConfirm.addEventListener("click", () => {
+      canceled = false;
+      mediaRecorder?.stop();
+    }, { signal });
+
+    appendChildren(recordingOverlay, recordCancel, recordCenter, recordConfirm);
     inputBox.appendChild(recordingOverlay);
 
     textarea.addEventListener("input", () => { autoResize(); maybeEmitTyping(); updateSendBtnIcon(); }, { signal });
@@ -416,10 +438,8 @@ export function createMessageInput(
       }
     }, { signal });
 
-    sendBtn.addEventListener("pointerdown", async (e: PointerEvent) => {
-      if (!micMode || options.onUploadFile === undefined) return;
-      e.preventDefault();
-      sendBtn?.setPointerCapture(e.pointerId);
+    async function startRecording() {
+      if (options.onUploadFile === undefined) return;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaRecorder = new MediaRecorder(stream);
@@ -445,41 +465,40 @@ export function createMessageInput(
         mediaRecorder.start();
         isRecording = true;
         canceled = false;
-        startX = e.clientX;
         recordStartTime = Date.now();
         
-        if (recordingOverlay !== null) recordingOverlay.style.display = "flex";
+        if (recordingOverlay !== null) {
+          recordingOverlay.style.display = "flex";
+        }
+        if (recordingTimeStr !== null) recordingTimeStr.textContent = "0:00";
         recordInterval = setInterval(() => {
           const s = Math.floor((Date.now() - recordStartTime) / 1000);
           const m = Math.floor(s / 60);
           const sec = s % 60;
           if (recordingTimeStr !== null) recordingTimeStr.textContent = `${m}:${sec.toString().padStart(2, "0")}`;
-        }, 500);
+          
+          // Animate live bars
+          liveBars.forEach(bar => {
+            const h = Math.floor(Math.random() * 80) + 20;
+            bar.style.height = `${h}%`;
+          });
+        }, 100); // Faster interval for smoother waveform
+
       } catch (err) {
-        // microphone access denied or unavailable
         console.error("Mic error", err);
       }
-    }, { signal });
-
-    sendBtn.addEventListener("pointermove", (e: PointerEvent) => {
-      if (micMode && isRecording) {
-        if (startX - e.clientX > 80) { // Slide left to cancel
-          canceled = true;
-          mediaRecorder?.stop();
-        }
-      }
-    }, { signal });
-
-    sendBtn.addEventListener("pointerup", (e: PointerEvent) => {
-      if (micMode) {
-        sendBtn?.releasePointerCapture(e.pointerId);
-        if (isRecording) mediaRecorder?.stop();
-      }
-    }, { signal });
+    }
 
     sendBtn.addEventListener("click", (e: MouseEvent) => {
       if (micMode) {
         e.preventDefault();
+        if (!isRecording) {
+          void startRecording();
+        } else {
+          // If already recording, clicking the mic button also stops and sends
+          canceled = false;
+          mediaRecorder?.stop();
+        }
       } else {
         handleSend();
       }
