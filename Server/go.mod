@@ -15,7 +15,7 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.49.0
-	golang.org/x/mod v0.34.0
+	golang.org/x/mod v0.35.0
 	modernc.org/sqlite v1.48.0
 	nhooyr.io/websocket v1.8.17
 )
