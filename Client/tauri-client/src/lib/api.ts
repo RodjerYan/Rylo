@@ -394,30 +394,64 @@ export function createApiClient(
       file: File,
       signal?: AbortSignal,
     ): Promise<UploadResponse> {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const url = `${baseUrl()}/uploads`;
+      const encodedFilename = encodeURIComponent(file.name);
+      const url = `${baseUrl()}/uploads/raw?filename=${encodedFilename}`;
       const h: Record<string, string> = {};
       if (config.token) {
         h["Authorization"] = `Bearer ${config.token}`;
       }
-      // Don't set Content-Type — browser sets multipart boundary
+      h["Content-Type"] = file.type === "" ? "application/octet-stream" : file.type;
 
-      const res = await fetch(url, {
-        method: "POST",
-        headers: h,
-        body: formData,
-        signal,
-        danger: { acceptInvalidCerts: true, acceptInvalidHostnames: false },
-      } as RequestInit);
+      // Tauri HTTP uploads can intermittently fail on TLS/network edges after
+      // most bytes are already sent. Retry a couple of times before surfacing.
+      const maxAttempts = 3;
+      let lastErr: unknown = null;
 
-      if (!res.ok) {
-        const err = await parseError(res);
-        throw new ApiClientError(res.status, err.error, err.message);
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: h,
+            body: file,
+            signal,
+            connectTimeout: 60_000,
+            danger: { acceptInvalidCerts: true, acceptInvalidHostnames: false },
+          } as RequestInit);
+
+          if (!res.ok) {
+            const err = await parseError(res);
+            throw new ApiClientError(res.status, err.error, err.message);
+          }
+
+          return res.json() as Promise<UploadResponse>;
+        } catch (err) {
+          // Don't retry user-aborted uploads.
+          if (signal?.aborted) {
+            throw err;
+          }
+          lastErr = err;
+          if (attempt >= maxAttempts) {
+            break;
+          }
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 350 * attempt);
+          });
+        }
       }
 
-      return res.json() as Promise<UploadResponse>;
+      if (lastErr instanceof Error) {
+        throw lastErr;
+      }
+      if (typeof lastErr === "string" && lastErr.trim() !== "") {
+        throw new Error(lastErr);
+      }
+      if (typeof lastErr === "object" && lastErr !== null) {
+        const maybeMessage = (lastErr as { message?: unknown }).message;
+        if (typeof maybeMessage === "string" && maybeMessage.trim() !== "") {
+          throw new Error(maybeMessage);
+        }
+      }
+      throw new Error("Upload request failed");
     },
 
     getDefaultAvatarCatalog(signal?: AbortSignal): Promise<DefaultAvatarCatalogResponse> {
@@ -479,6 +513,10 @@ export function createApiClient(
 
     revokeInvite(inviteCode: string | number, signal?: AbortSignal): Promise<void> {
       return request<void>("DELETE", `/invites/${String(inviteCode)}`, undefined, signal);
+    },
+
+    deleteInvite(inviteCode: string | number, signal?: AbortSignal): Promise<void> {
+      return request<void>("DELETE", `/invites/${String(inviteCode)}/delete`, undefined, signal);
     },
 
     // ── Emoji ─────────────────────────────────────────────

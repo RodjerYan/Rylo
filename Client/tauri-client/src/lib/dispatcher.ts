@@ -4,7 +4,10 @@
 
 import type { WsClient } from "./ws";
 import { authStore, setAuth, clearAuth, updateUser } from "@stores/auth.store";
+import { ensureKeyPair, getPublicKey, decryptMessage, isEncryptedContent } from "@lib/crypto";
 import { setTransientError } from "@stores/ui.store";
+import { normalizeProfileMedia } from "@lib/profile-media";
+import { ClientMessageType } from "@lib/protocolTypes";
 import {
   setChannels,
   setRoles,
@@ -21,12 +24,14 @@ import {
   deleteMessage,
   updateReaction,
   confirmSend,
+  updateMessageAuthorProfile,
 } from "@stores/messages.store";
 import {
   setMembers,
   addMember,
   removeMember,
   updateMemberRole,
+  updateMemberProfile,
   updatePresence,
   setTyping,
 } from "@stores/members.store";
@@ -48,6 +53,7 @@ import {
   updateDmLastMessagePreview,
   markDmMessageDeleted,
   updateDmRecipientPresence,
+  updateDmRecipientProfile,
 } from "@stores/dm.store";
 import type { DmChannel } from "@stores/dm.store";
 import type { DmChannelPayload } from "./types";
@@ -98,7 +104,8 @@ function mapDmPayload(p: DmChannelPayload): DmChannel {
       id: p.recipient.id,
       profileId: p.recipient.profile_id,
       username: p.recipient.username,
-      avatar: p.recipient.avatar,
+      avatar: normalizeProfileMedia(p.recipient.avatar),
+      banner: normalizeProfileMedia(p.recipient.banner),
       status: p.recipient.status,
       lastSeen: p.recipient.last_seen ?? null,
     },
@@ -122,7 +129,19 @@ export function wireDispatcher(ws: WsClient): DispatcherCleanup {
   // ── Auth ──────────────────────────────────────────────
 
   unsubs.push(
-    ws.on(S.AUTH_OK, (payload) => {
+    ws.on(S.AUTH_OK, async (payload) => {
+      try {
+        await ensureKeyPair();
+        const publicKey = getPublicKey();
+        if (publicKey) {
+          ws.send({
+            type: ClientMessageType.UPDATE_PUBLIC_KEY,
+            payload: { public_key: publicKey },
+          } as any);
+        }
+      } catch (err) {
+        log.warn("Failed to setup H2H keys (non-fatal)", { error: String(err) });
+      }
       setAuth(
         authStore.getState().token ?? "",
         payload.user,
@@ -192,13 +211,27 @@ export function wireDispatcher(ws: WsClient): DispatcherCleanup {
   // ── Chat Messages ─────────────────────────────────────
 
   unsubs.push(
-    ws.on(S.CHAT_MESSAGE, (payload) => {
+    ws.on(S.CHAT_MESSAGE, async (payload) => {
       log.debug("chat_message received", {
         id: payload.id,
         channelId: payload.channel_id,
         user: payload.user.username,
       });
-      addMessage(payload);
+
+      let processedPayload = payload;
+      if (isEncryptedContent(payload.content)) {
+        try {
+          const decrypted = await decryptMessage(
+            payload.content.encrypted,
+            payload.content.sender_public_key,
+          );
+          processedPayload = { ...payload, content: decrypted as any };
+        } catch (err) {
+          log.warn("Failed to decrypt message", { error: String(err), messageId: payload.id });
+        }
+      }
+
+      addMessage(processedPayload);
       const activeId = channelsStore.select(
         (s) => s.activeChannelId,
       );
@@ -361,6 +394,31 @@ export function wireDispatcher(ws: WsClient): DispatcherCleanup {
     ws.on(S.MEMBER_UPDATE, (payload) => {
       log.info("Member role updated", { userId: payload.user_id, role: payload.role });
       updateMemberRole(payload.user_id, payload.role);
+    }),
+  );
+
+  unsubs.push(
+    ws.on(S.MEMBER_PROFILE_UPDATE, (payload) => {
+      const profile = {
+        username: payload.username,
+        avatar: normalizeProfileMedia(payload.avatar),
+        banner: normalizeProfileMedia(payload.banner),
+      };
+      log.info("Member profile updated", {
+        userId: payload.user_id,
+        username: payload.username,
+      });
+      updateMemberProfile(payload.user_id, profile);
+      updateDmRecipientProfile(payload.user_id, profile);
+      updateMessageAuthorProfile(payload.user_id, profile);
+      const currentUserId = authStore.getState().user?.id ?? 0;
+      if (payload.user_id === currentUserId) {
+        updateUser({
+          username: payload.username,
+          avatar: payload.avatar,
+          banner: payload.banner,
+        });
+      }
     }),
   );
 

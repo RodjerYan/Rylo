@@ -30,6 +30,7 @@ import { createCertMismatchModal } from "@components/CertMismatchModal";
 import { createProfileManager, createTauriBackend } from "@lib/profiles";
 import type { CertTofuEvent } from "@lib/ws";
 import { installRussianUiTranslations } from "@lib/i18n";
+import { createUpdateNotifier } from "@components/UpdateNotifier";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -79,6 +80,9 @@ const appEl = document.getElementById("app");
 if (!appEl) {
   throw new Error("Missing #app element");
 }
+
+const updateNotifier = createUpdateNotifier();
+updateNotifier.mount(document.body);
 
 const uiTranslationObserver = installRussianUiTranslations(document.body);
 
@@ -493,6 +497,7 @@ window.addEventListener("beforeunload", () => {
   }
   // Flush any buffered log entries to disk before the window closes.
   void flushLogs();
+  updateNotifier.destroy?.();
   uiTranslationObserver.disconnect();
 });
 

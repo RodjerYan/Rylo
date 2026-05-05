@@ -1,0 +1,22 @@
+
+
+    ____        _
+   |  _ \ _   _| | ___
+   | |_) | | | | |/ _ \
+   |  _ <| |_| | | (_) |
+   |_| \_\\__, |_|\___/
+          |___/
+
+   ─────────────────────────────────────────────
+    Server   Rylo Server
+    Version  dev
+    TLS      enabled
+    Platform windows/amd64
+   ─────────────────────────────────────────────
+    API      https://172.16.0.2:8443/api/v1/info
+    WebSocket   wss://172.16.0.2:8443/api/v1/ws
+    Admin    https://172.16.0.2:8443/admin
+    Health   https://172.16.0.2:8443/health
+   ─────────────────────────────────────────────
+    Press Ctrl+C to stop the server.
+

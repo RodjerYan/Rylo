@@ -31,6 +31,7 @@ export const ServerMessageType = {
   MEMBER_JOIN: "member_join",
   MEMBER_LEAVE: "member_leave",
   MEMBER_UPDATE: "member_update",
+  MEMBER_PROFILE_UPDATE: "member_profile_update",
   MEMBER_BAN: "member_ban",
   SERVER_RESTART: "server_restart",
   ERROR: "error",
@@ -66,6 +67,7 @@ export const ClientMessageType = {
   PING: "ping",
   // Extension (not in protocol-schema.json but used in practice)
   VOICE_TOKEN_REFRESH: "voice_token_refresh",
+  UPDATE_PUBLIC_KEY: "update_public_key",
 } as const;
 
 export type ClientMessageTypeValue =

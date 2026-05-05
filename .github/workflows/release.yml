@@ -69,7 +69,12 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build
+        run: |
+          $path = "src-tauri/tauri.conf.json"
+          $json = Get-Content $path -Raw | ConvertFrom-Json
+          $json.bundle.createUpdaterArtifacts = $true
+          $json | ConvertTo-Json -Depth 100 | Set-Content $path -Encoding utf8
+          npm run tauri build
 
       - name: Disable updater artifacts for fallback build
         if: steps.signing.outputs.enabled != 'true' || steps.tauri_signed.outcome == 'failure'
@@ -100,8 +105,51 @@ jobs:
           # Updater artifacts (produced when TAURI_SIGNING_PRIVATE_KEY is set)
           NSIS_ZIP=$(find "$NSIS_DIR" -name "*_x64-setup.nsis.zip" ! -name "*.sig" | head -1)
           NSIS_SIG=$(find "$NSIS_DIR" -name "*_x64-setup.nsis.zip.sig" | head -1)
+          LATEST_JSON=$(find "$NSIS_DIR" -name "latest*.json" | head -1)
           echo "nsis_zip=${NSIS_ZIP:-}" >> "$GITHUB_OUTPUT"
           echo "nsis_sig=${NSIS_SIG:-}" >> "$GITHUB_OUTPUT"
+          echo "latest_json=${LATEST_JSON:-}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare updater manifest
+        id: updater_manifest
+        shell: pwsh
+        run: |
+          $existingLatest = "${{ steps.artifacts.outputs.latest_json }}"
+          if ($existingLatest -and (Test-Path $existingLatest)) {
+            "path=$existingLatest" >> $env:GITHUB_OUTPUT
+            Write-Host "Using existing updater manifest: $existingLatest"
+            exit 0
+          }
+
+          $nsisZip = "${{ steps.artifacts.outputs.nsis_zip }}"
+          $nsisSig = "${{ steps.artifacts.outputs.nsis_sig }}"
+          if (-not $nsisZip -or -not $nsisSig -or -not (Test-Path $nsisZip) -or -not (Test-Path $nsisSig)) {
+            "path=" >> $env:GITHUB_OUTPUT
+            Write-Host "No signed updater artifacts found, skipping updater manifest."
+            exit 0
+          }
+
+          $signature = (Get-Content -LiteralPath $nsisSig -Raw).Trim()
+          $zipName = Split-Path -Path $nsisZip -Leaf
+          $downloadUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$zipName"
+          $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $platform = @{
+            url = $downloadUrl
+            signature = $signature
+          }
+          $manifest = @{
+            version = "${{ env.VERSION }}"
+            notes = "Rylo ${{ env.VERSION }}"
+            pub_date = $pubDate
+            platforms = @{
+              "windows-x86_64" = $platform
+              "windows-x86_64-nsis" = $platform
+            }
+          }
+          $manifestPath = "latest.json"
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+          "path=$manifestPath" >> $env:GITHUB_OUTPUT
+          Write-Host "Generated updater manifest: $manifestPath"
 
       - name: Generate SHA256 checksums
         shell: pwsh
@@ -142,6 +190,9 @@ jobs:
           fi
           if [ -n "${{ steps.artifacts.outputs.nsis_sig }}" ]; then
             ASSETS+=("${{ steps.artifacts.outputs.nsis_sig }}")
+          fi
+          if [ -n "${{ steps.updater_manifest.outputs.path }}" ]; then
+            ASSETS+=("${{ steps.updater_manifest.outputs.path }}")
           fi
           gh release create ${{ github.ref_name }} \
             --generate-notes \

@@ -34,6 +34,7 @@ export type IconName =
   | "settings"
   | "smile"
   | "send"
+  | "paperclip"
   | "reply"
   | "pencil"
   | "trash-2"
@@ -71,8 +72,8 @@ export type IconName =
 // ---------------------------------------------------------------------------
 
 const ICON_PATHS: Record<IconName, string> = {
-  // Microphone
-  mic: `<path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>`,
+  // Microphone - properly centered premium design
+  mic: `<path d="M12 1a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V4a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 19v3"/><path d="M10 22h4"/>`,
 
   // Microphone with slash
   "mic-off": `<line x1="2" x2="22" y1="2" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/>`,
@@ -122,8 +123,11 @@ const ICON_PATHS: Record<IconName, string> = {
   // Smiley face
   smile: `<circle cx="12" cy="12" r="10"/><path d="M8 13s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/>`,
 
-  // Paper plane / send
-  send: `<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>`,
+  // Paper plane / send - premium design
+  send: `<path d="M2.01 21L22 12 2.01 3 10 14 2 17 10 14 2 21z"/>`,
+
+  // Paperclip / attachment
+  paperclip: `<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.48-8.48a4 4 0 0 1 5.66 5.66l-8.49 8.48a2 2 0 1 1-2.83-2.83l8.48-8.48"/>`,
 
   // Reply / corner-up-left
   reply: `<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>`,

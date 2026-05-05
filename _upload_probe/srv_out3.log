@@ -1,0 +1,10 @@
+time=2026-04-22T15:08:20.282+03:00 level=WARN msg="generated random LiveKit API key — voice tokens will break on restart; set voice.livekit_api_key in config.yaml for stable operation"
+time=2026-04-22T15:08:20.297+03:00 level=WARN msg="generated random LiveKit API secret — set voice.livekit_api_secret in config.yaml for stable operation"
+time=2026-04-22T15:08:20.310+03:00 level=INFO msg="reset all user statuses to offline"
+time=2026-04-22T15:08:20.313+03:00 level=INFO msg="cleared stale voice states"
+time=2026-04-22T15:08:28.173+03:00 level=INFO msg="livekit: client initialized" url=ws://localhost:7880 http_url=http://localhost:7880
+time=2026-04-22T15:08:28.178+03:00 level=WARN msg="AllowedOrigins contains wildcard '*' — consider restricting to specific origins for production use"
+time=2026-04-22T15:08:28.182+03:00 level=INFO msg="server starting" addr=:8443 tls=true version=dev
+time=2026-04-22T15:11:37.963+03:00 level=ERROR msg="failed to mirror attachment to Yandex Disk, scheduling background retry" id=10ccbe5c-b1f6-4949-b3af-2413cd53dfd9 error="upload to Yandex Disk /RyloData/blobs/10ccbe5c-b1f6-4949-b3af-2413cd53dfd9.bin: Put \"https://uploader41klg.disk.yandex.net:443/upload-target/20260422T151040.129.utd.caa6g0evd0dmtwdt7da4qy615-k41klg.10143385\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
+time=2026-04-22T15:11:37.964+03:00 level=INFO msg="file uploaded" id=10ccbe5c-b1f6-4949-b3af-2413cd53dfd9 filename=big_test_95mb.bin size=99614720 mime=application/octet-stream
+time=2026-04-22T15:11:37.966+03:00 level=INFO msg="http request" method=POST path=/api/v1/uploads status=201 duration_ms=189467 bytes=186 client_ip=::1 req_id=a-shiryaev-lkgr/0g5mSFbs9v-000001

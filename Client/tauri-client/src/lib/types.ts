@@ -53,6 +53,7 @@ export interface MessageUser {
   readonly id: number;
   readonly username: string;
   readonly avatar: string | null;
+  readonly public_key?: string | null;
 }
 
 /** User object with role, used in auth_ok and member_join. */
@@ -103,9 +104,11 @@ export interface ReadyMember {
   readonly profile_id?: string;
   readonly username: string;
   readonly avatar: string | null;
+  readonly banner?: string | null;
   readonly role: string;
   readonly status: UserStatus;
   readonly last_seen?: string | null;
+  readonly public_key?: string | null;
 }
 
 /** Voice state object in the ready payload. */
@@ -303,6 +306,13 @@ export interface MemberUpdatePayload {
   readonly role: string;
 }
 
+export interface MemberProfileUpdatePayload {
+  readonly user_id: number;
+  readonly username: string;
+  readonly avatar: string | null;
+  readonly banner: string | null;
+}
+
 export interface MemberBanPayload {
   readonly user_id: number;
 }
@@ -317,6 +327,7 @@ export interface DmRecipient {
   readonly profile_id?: string;
   readonly username: string;
   readonly avatar: string | null;
+  readonly banner?: string | null;
   readonly status: string;
   readonly last_seen?: string | null;
 }
@@ -368,6 +379,8 @@ export interface ChatSendPayload {
   readonly content: string;
   readonly reply_to: number | null;
   readonly attachments: readonly string[];
+  readonly encrypted_content?: string;
+  readonly sender_public_key?: string;
 }
 
 export interface ChatEditPayload {
@@ -454,6 +467,7 @@ export type ServerMessage =
   | (WsEnvelope<MemberJoinPayload> & { readonly type: "member_join" })
   | (WsEnvelope<MemberLeavePayload> & { readonly type: "member_leave" })
   | (WsEnvelope<MemberUpdatePayload> & { readonly type: "member_update" })
+  | (WsEnvelope<MemberProfileUpdatePayload> & { readonly type: "member_profile_update" })
   | (WsEnvelope<MemberBanPayload> & { readonly type: "member_ban" })
   | (WsEnvelope<DmChannelOpenPayload> & { readonly type: "dm_channel_open" })
   | (WsEnvelope<DmChannelClosePayload> & { readonly type: "dm_channel_close" })
@@ -549,6 +563,7 @@ export interface MemberResponse {
   readonly role_id?: number;
   readonly status?: UserStatus;
   readonly last_seen?: string | null;
+  readonly public_key?: string | null;
 }
 
 /** Search result item. */

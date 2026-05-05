@@ -42,6 +42,7 @@ const (
 	EventTypeMessageDelete = "message_delete"
 	EventTypePresence      = "presence"
 	EventTypeReaction      = "reaction"
+	EventTypeProfileUpdate = "profile_update"
 )
 
 type InvitePayload struct {
@@ -129,6 +130,16 @@ type ReactionPayload struct {
 	DMParticipants []string `json:"dm_participants,omitempty"`
 }
 
+type ProfileUpdatePayload struct {
+	PreviousUsername string             `json:"previous_username,omitempty"`
+	Username         string             `json:"username"`
+	Avatar           string             `json:"avatar"`
+	Banner           string             `json:"banner"`
+	Timestamp        string             `json:"timestamp"`
+	AvatarAttachment *AttachmentPayload `json:"avatar_attachment,omitempty"`
+	BannerAttachment *AttachmentPayload `json:"banner_attachment,omitempty"`
+}
+
 type ImportedMessage struct {
 	MessageID        int64
 	ChannelID        int64
@@ -165,6 +176,13 @@ type ImportedReaction struct {
 	DMParticipantIDs []int64
 }
 
+type ImportedProfileUpdate struct {
+	UserID   int64
+	Username string
+	Avatar   *string
+	Banner   *string
+}
+
 type DefaultAvatarCategory struct {
 	Name    string
 	Avatars []DefaultAvatarEntry
@@ -183,19 +201,21 @@ type PreparedRegistration struct {
 // Replicator mirrors selected Rylo data to a shared Yandex Disk folder and
 // imports new remote events back into the local database.
 type Replicator struct {
-	enabled       bool
-	db            *db.DB
-	client        *webDAVClient
-	key           []byte
-	rootPath      string
-	advertiseHost string
-	nodeID        string
-	pollInterval  time.Duration
-	stopCh        chan struct{}
-	importedHook  func(ImportedMessage)
-	deletedHook   func(ImportedDelete)
-	presenceHook  func(ImportedPresence)
-	reactionHook  func(ImportedReaction)
+	enabled             bool
+	db                  *db.DB
+	client              *webDAVClient
+	key                 []byte
+	rootPath            string
+	advertiseHost       string
+	nodeID              string
+	pollInterval        time.Duration
+	stopCh              chan struct{}
+	profileBackfillDone bool
+	importedHook        func(ImportedMessage)
+	deletedHook         func(ImportedDelete)
+	presenceHook        func(ImportedPresence)
+	reactionHook        func(ImportedReaction)
+	profileHook         func(ImportedProfileUpdate)
 }
 
 // New creates a Yandex Disk replicator. When the feature is disabled, a
@@ -302,6 +322,15 @@ func (r *Replicator) SetImportedReactionHook(hook func(ImportedReaction)) {
 	r.reactionHook = hook
 }
 
+// SetImportedProfileHook registers a callback invoked when a remote profile
+// update event is imported into the local DB.
+func (r *Replicator) SetImportedProfileHook(hook func(ImportedProfileUpdate)) {
+	if r == nil {
+		return
+	}
+	r.profileHook = hook
+}
+
 // PrepareRegistration writes the remote encrypted user profile and a remote
 // registration event before the local DB insert happens.
 func (r *Replicator) PrepareRegistration(ctx context.Context, username, passwordHash string, roleID int64) (*PreparedRegistration, error) {
@@ -384,6 +413,7 @@ func (r *Replicator) SyncInviteCache(ctx context.Context) error {
 		return fmt.Errorf("list remote invites: %w", err)
 	}
 
+	remoteCodes := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.Type == "dir" || !strings.HasSuffix(strings.ToLower(entry.Name), ".json.enc") {
 			continue
@@ -403,6 +433,7 @@ func (r *Replicator) SyncInviteCache(ctx context.Context) error {
 		if strings.TrimSpace(payload.Code) == "" {
 			continue
 		}
+		remoteCodes = append(remoteCodes, payload.Code)
 
 		creator, err := r.db.GetUserByID(payload.CreatedBy)
 		if err != nil {
@@ -446,6 +477,10 @@ func (r *Replicator) SyncInviteCache(ctx context.Context) error {
 		}
 	}
 
+	if err := r.db.DeleteInvitesExcept(remoteCodes); err != nil {
+		return fmt.Errorf("prune deleted remote invites: %w", err)
+	}
+
 	return nil
 }
 
@@ -471,6 +506,43 @@ func (r *Replicator) RevokeInvite(ctx context.Context, code string) error {
 	payload.Revoked = true
 	payload.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	return r.putEncryptedJSON(ctx, r.invitePath(code), payload)
+}
+
+// DeleteInvite permanently removes an invite snapshot from Yandex Disk. The
+// invite is marked revoked before removal when possible so a concurrent device
+// cannot redeem it while deletion is in progress.
+func (r *Replicator) DeleteInvite(ctx context.Context, code string) error {
+	if !r.Enabled() {
+		return nil
+	}
+	lockPath := r.inviteLockPath(code)
+	locked, err := r.acquireInviteLock(ctx, lockPath)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return fmt.Errorf("invite is busy")
+	}
+	defer r.releaseInviteLock(context.Background(), lockPath)
+
+	invitePath := r.invitePath(code)
+	exists, err := r.client.Exists(ctx, invitePath)
+	if err != nil {
+		return err
+	}
+	if exists {
+		payload, err := r.readInvitePayload(ctx, code)
+		if err == nil {
+			payload.Revoked = true
+			payload.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			if err := r.putEncryptedJSON(ctx, invitePath, payload); err != nil {
+				return err
+			}
+		} else {
+			slog.Warn("failed to revoke invite snapshot before permanent delete", "code", code, "error", err)
+		}
+	}
+	return r.client.Delete(ctx, invitePath)
 }
 
 // ConsumeInvite validates an invite in Yandex Disk and atomically flips it to
@@ -590,6 +662,54 @@ func (r *Replicator) MirrorUserAsset(ctx context.Context, userID int64, kind, at
 		return err
 	}
 	return r.putEncryptedBytes(ctx, r.userAssetPath(userID, kind, attachmentID), plaintext, "application/octet-stream")
+}
+
+// MirrorProfileUpdate publishes a replicated user profile snapshot update so
+// other nodes can apply avatar/banner/username changes.
+func (r *Replicator) MirrorProfileUpdate(ctx context.Context, previousUsername string, user *db.User) error {
+	if !r.Enabled() || user == nil {
+		return nil
+	}
+
+	avatar := ""
+	if user.Avatar != nil {
+		avatar = *user.Avatar
+	}
+	banner := ""
+	if user.Banner != nil {
+		banner = *user.Banner
+	}
+
+	payload := ProfileUpdatePayload{
+		PreviousUsername: strings.TrimSpace(previousUsername),
+		Username:         strings.TrimSpace(user.Username),
+		Avatar:           avatar,
+		Banner:           banner,
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Attach metadata for profile media file URLs so the receiver can create
+	// local attachment records before serving /api/v1/files/{id}.
+	if avatarID, ok := profileMediaAttachmentID(avatar); ok {
+		att, err := r.buildAttachmentPayload(avatarID)
+		if err != nil {
+			return err
+		}
+		payload.AvatarAttachment = att
+	}
+	if bannerID, ok := profileMediaAttachmentID(banner); ok {
+		att, err := r.buildAttachmentPayload(bannerID)
+		if err != nil {
+			return err
+		}
+		payload.BannerAttachment = att
+	}
+
+	eventID, eventPath, err := r.publishEvent(ctx, EventTypeProfileUpdate, payload)
+	if err != nil {
+		return err
+	}
+	return r.db.MarkSyncEventProcessed(eventPath, eventID)
 }
 
 // ListDefaultAvatarCatalog returns all configured default avatars grouped by
@@ -850,6 +970,13 @@ func (r *Replicator) SyncOnce(ctx context.Context) error {
 	if !r.Enabled() {
 		return nil
 	}
+	if !r.profileBackfillDone {
+		if err := r.backfillMissingProfileMedia(ctx); err != nil {
+			slog.Warn("profile media backfill failed", "error", err)
+		} else {
+			r.profileBackfillDone = true
+		}
+	}
 
 	paths, err := r.client.List(ctx, r.remotePath(remoteEventsDir))
 	if err != nil {
@@ -934,6 +1061,12 @@ func (r *Replicator) applyEvent(ctx context.Context, env EventEnvelope) error {
 			return fmt.Errorf("decode reaction payload: %w", err)
 		}
 		return r.applyReaction(payload)
+	case EventTypeProfileUpdate:
+		var payload ProfileUpdatePayload
+		if err := json.Unmarshal(env.Payload, &payload); err != nil {
+			return fmt.Errorf("decode profile update payload: %w", err)
+		}
+		return r.applyProfileUpdate(payload)
 	default:
 		return fmt.Errorf("unknown event type %q", env.Type)
 	}
@@ -949,6 +1082,213 @@ func (r *Replicator) applyRegistration(payload RegistrationPayload) error {
 	}
 	_, err = r.db.CreateUser(payload.Username, payload.PasswordHash, int(payload.RoleID))
 	return err
+}
+
+func (r *Replicator) applyProfileUpdate(payload ProfileUpdatePayload) error {
+	username := strings.TrimSpace(payload.Username)
+	if username == "" {
+		return fmt.Errorf("profile update payload missing username")
+	}
+
+	previous := strings.TrimSpace(payload.PreviousUsername)
+	var user *db.User
+	var err error
+
+	if previous != "" {
+		user, err = r.db.GetUserByUsername(previous)
+		if err != nil {
+			return err
+		}
+	}
+	if user == nil {
+		user, err = r.db.GetUserByUsername(username)
+		if err != nil {
+			return err
+		}
+	}
+	if user == nil {
+		return fmt.Errorf("profile user %q not imported yet", username)
+	}
+
+	if err := r.ensureAttachmentSnapshot(payload.AvatarAttachment); err != nil {
+		return err
+	}
+	if err := r.ensureAttachmentSnapshot(payload.BannerAttachment); err != nil {
+		return err
+	}
+
+	avatar := payload.Avatar
+	banner := payload.Banner
+	if err := r.db.UpdateUserProfile(user.ID, &username, &avatar, &banner); err != nil {
+		return err
+	}
+	r.emitImportedProfile(ImportedProfileUpdate{
+		UserID:   user.ID,
+		Username: username,
+		Avatar:   normalizeProfileMediaPtr(avatar),
+		Banner:   normalizeProfileMediaPtr(banner),
+	})
+	return nil
+}
+
+func (r *Replicator) backfillMissingProfileMedia(ctx context.Context) error {
+	members, err := r.db.ListMembers()
+	if err != nil {
+		return err
+	}
+	for _, member := range members {
+		user, getErr := r.db.GetUserByID(member.ID)
+		if getErr != nil || user == nil {
+			continue
+		}
+
+		needAvatar := user.Avatar == nil || strings.TrimSpace(*user.Avatar) == ""
+		needBanner := user.Banner == nil || strings.TrimSpace(*user.Banner) == ""
+		if !needAvatar && !needBanner {
+			continue
+		}
+
+		avatarID, bannerID, pickErr := r.pickLatestUserAssetIDs(ctx, user.ID)
+		if pickErr != nil {
+			slog.Warn("failed to list remote user assets", "user_id", user.ID, "error", pickErr)
+			continue
+		}
+
+		var avatar *string
+		if needAvatar && avatarID != "" {
+			value := "/api/v1/files/" + avatarID
+			avatar = &value
+		}
+		var banner *string
+		if needBanner && bannerID != "" {
+			value := "/api/v1/files/" + bannerID
+			banner = &value
+		}
+		if avatar == nil && banner == nil {
+			continue
+		}
+
+		if updErr := r.db.UpdateUserProfile(user.ID, nil, avatar, banner); updErr != nil {
+			slog.Warn("failed to backfill profile media", "user_id", user.ID, "error", updErr)
+			continue
+		}
+
+		updated, getUpdatedErr := r.db.GetUserByID(user.ID)
+		if getUpdatedErr != nil || updated == nil {
+			continue
+		}
+		r.emitImportedProfile(ImportedProfileUpdate{
+			UserID:   updated.ID,
+			Username: strings.TrimSpace(updated.Username),
+			Avatar:   normalizeProfileMediaForWS(updated.Avatar),
+			Banner:   normalizeProfileMediaForWS(updated.Banner),
+		})
+	}
+	return nil
+}
+
+func (r *Replicator) pickLatestUserAssetIDs(ctx context.Context, userID int64) (string, string, error) {
+	entries, err := r.client.ListEntries(ctx, r.remotePath(remoteUsersDir, fmt.Sprintf("%d", userID)))
+	if err != nil {
+		return "", "", err
+	}
+
+	var latestAvatarID string
+	var latestAvatarTime time.Time
+	var hasAvatarTime bool
+	var latestBannerID string
+	var latestBannerTime time.Time
+	var hasBannerTime bool
+
+	for _, entry := range entries {
+		kind, attachmentID, ok := parseRemoteUserAssetFilename(entry.Name)
+		if !ok {
+			continue
+		}
+		modifiedAt, modifiedOK := parseRemoteModifiedTime(entry.Modified)
+
+		switch kind {
+		case "avatar":
+			if shouldReplaceLatestAsset(latestAvatarID, hasAvatarTime, latestAvatarTime, modifiedOK, modifiedAt) {
+				latestAvatarID = attachmentID
+				latestAvatarTime = modifiedAt
+				hasAvatarTime = modifiedOK
+			}
+		case "banner":
+			if shouldReplaceLatestAsset(latestBannerID, hasBannerTime, latestBannerTime, modifiedOK, modifiedAt) {
+				latestBannerID = attachmentID
+				latestBannerTime = modifiedAt
+				hasBannerTime = modifiedOK
+			}
+		}
+	}
+
+	return latestAvatarID, latestBannerID, nil
+}
+
+func parseRemoteUserAssetFilename(name string) (string, string, bool) {
+	base := strings.TrimSuffix(strings.TrimSpace(name), ".bin")
+	if base == strings.TrimSpace(name) {
+		return "", "", false
+	}
+	parts := strings.SplitN(base, "_", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	kind := strings.ToLower(strings.TrimSpace(parts[0]))
+	if kind != "avatar" && kind != "banner" {
+		return "", "", false
+	}
+	attachmentID := strings.TrimSpace(parts[1])
+	if attachmentID == "" {
+		return "", "", false
+	}
+	return kind, attachmentID, true
+}
+
+func parseRemoteModifiedTime(value string) (time.Time, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+	ts, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return ts, true
+}
+
+func shouldReplaceLatestAsset(currentID string, currentHasTime bool, currentTime time.Time, nextHasTime bool, nextTime time.Time) bool {
+	if currentID == "" {
+		return true
+	}
+	if nextHasTime {
+		if !currentHasTime {
+			return true
+		}
+		return nextTime.After(currentTime)
+	}
+	return false
+}
+
+func normalizeProfileMediaForWS(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	copyValue := trimmed
+	return &copyValue
+}
+
+func normalizeProfileMediaPtr(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	copyValue := value
+	return &copyValue
 }
 
 func (r *Replicator) applyPresence(payload PresencePayload) error {
@@ -1300,6 +1640,18 @@ func (r *Replicator) emitImportedReaction(event ImportedReaction) {
 	r.reactionHook(event)
 }
 
+func (r *Replicator) emitImportedProfile(event ImportedProfileUpdate) {
+	if r.profileHook == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Warn("imported profile hook panicked", "panic", rec)
+		}
+	}()
+	r.profileHook(event)
+}
+
 func (r *Replicator) readInvitePayload(ctx context.Context, code string) (InvitePayload, error) {
 	var payload InvitePayload
 	raw, err := r.getDecryptedBytes(ctx, r.invitePath(code))
@@ -1402,6 +1754,59 @@ func (r *Replicator) userProfilePath(username string) string {
 func (r *Replicator) userAssetPath(userID int64, kind, attachmentID string) string {
 	filename := fmt.Sprintf("%s_%s.bin", kind, attachmentID)
 	return r.remotePath(remoteUsersDir, fmt.Sprintf("%d", userID), filename)
+}
+
+func profileMediaAttachmentID(value string) (string, bool) {
+	const filePrefix = "/api/v1/files/"
+	trimmed := strings.TrimSpace(value)
+	if !strings.HasPrefix(trimmed, filePrefix) {
+		return "", false
+	}
+	attachmentID := strings.TrimPrefix(trimmed, filePrefix)
+	if cut := strings.IndexAny(attachmentID, "?#"); cut >= 0 {
+		attachmentID = attachmentID[:cut]
+	}
+	if attachmentID == "" || strings.Contains(attachmentID, "/") {
+		return "", false
+	}
+	return attachmentID, true
+}
+
+func (r *Replicator) buildAttachmentPayload(attachmentID string) (*AttachmentPayload, error) {
+	att, err := r.db.GetAttachmentByID(attachmentID)
+	if err != nil {
+		return nil, err
+	}
+	if att == nil {
+		return nil, nil
+	}
+
+	return &AttachmentPayload{
+		ID:       att.ID,
+		Filename: att.Filename,
+		Size:     att.Size,
+		Mime:     att.MimeType,
+	}, nil
+}
+
+func (r *Replicator) ensureAttachmentSnapshot(att *AttachmentPayload) error {
+	if att == nil {
+		return nil
+	}
+	existing, err := r.db.GetAttachmentByID(att.ID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := r.db.CreateAttachment(att.ID, att.Filename, att.ID, att.Mime, att.Size, att.Width, att.Height); err != nil {
+		if db.IsUniqueConstraintError(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *Replicator) remotePath(parts ...string) string {
@@ -1532,9 +1937,10 @@ type webDAVClient struct {
 }
 
 type webDAVResourceEntry struct {
-	Path string
-	Type string
-	Name string
+	Path     string
+	Type     string
+	Name     string
+	Modified string
 }
 
 func newWebDAVClient(baseURL, token string) *webDAVClient {
@@ -1668,9 +2074,10 @@ func (c *webDAVClient) List(ctx context.Context, remotePath string) ([]string, e
 
 func (c *webDAVClient) ListEntries(ctx context.Context, remotePath string) ([]webDAVResourceEntry, error) {
 	type embeddedItem struct {
-		Path string `json:"path"`
-		Type string `json:"type"`
-		Name string `json:"name"`
+		Path     string `json:"path"`
+		Type     string `json:"type"`
+		Name     string `json:"name"`
+		Modified string `json:"modified"`
 	}
 	type embedded struct {
 		Items []embeddedItem `json:"items"`
@@ -1695,9 +2102,10 @@ func (c *webDAVClient) ListEntries(ctx context.Context, remotePath string) ([]we
 	results := make([]webDAVResourceEntry, 0, len(resource.Embedded.Items))
 	for _, item := range resource.Embedded.Items {
 		results = append(results, webDAVResourceEntry{
-			Path: fromDiskPath(item.Path),
-			Type: strings.TrimSpace(item.Type),
-			Name: strings.TrimSpace(item.Name),
+			Path:     fromDiskPath(item.Path),
+			Type:     strings.TrimSpace(item.Type),
+			Name:     strings.TrimSpace(item.Name),
+			Modified: strings.TrimSpace(item.Modified),
 		})
 	}
 	return results, nil

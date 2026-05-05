@@ -12,7 +12,14 @@ fn main() {
 }
 
 fn build_server_binary() {
-    let server_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Server");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let server_dir = manifest_dir
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("Server")
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("failed to resolve Server directory path: {err}"));
 
     let status = Command::new("go")
         .current_dir(&server_dir)

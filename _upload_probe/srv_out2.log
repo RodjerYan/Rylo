@@ -1,0 +1,4 @@
+time=2026-04-22T15:07:55.885+03:00 level=WARN msg="generated random LiveKit API key — voice tokens will break on restart; set voice.livekit_api_key in config.yaml for stable operation"
+time=2026-04-22T15:07:55.899+03:00 level=WARN msg="generated random LiveKit API secret — set voice.livekit_api_secret in config.yaml for stable operation"
+time=2026-04-22T15:07:55.905+03:00 level=INFO msg="reset all user statuses to offline"
+time=2026-04-22T15:07:55.908+03:00 level=INFO msg="cleared stale voice states"
