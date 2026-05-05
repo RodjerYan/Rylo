@@ -698,6 +698,58 @@ func TestHub_BroadcastMemberUpdate_NoClients_NoPanic(t *testing.T) {
 	hub.BroadcastMemberUpdate(1, "member")
 }
 
+func TestHub_BroadcastMemberProfileUpdate_DeliversToAllClients(t *testing.T) {
+	hub, database := newServeHub(t)
+
+	u1 := seedTestUser(t, database, "memprofile-u1")
+	s1 := make(chan []byte, 4)
+	hub.Register(ws.NewTestClient(hub, u1, s1))
+	time.Sleep(20 * time.Millisecond)
+
+	avatar := "/api/v1/files/new-avatar"
+	banner := "color:#4e5d94"
+	hub.BroadcastMemberProfileUpdate(777, "ProfileUser", &avatar, &banner)
+	time.Sleep(20 * time.Millisecond)
+
+	select {
+	case msg := <-s1:
+		var env struct {
+			Type    string `json:"type"`
+			Payload struct {
+				UserID   float64 `json:"user_id"`
+				Username string  `json:"username"`
+				Avatar   *string `json:"avatar"`
+				Banner   *string `json:"banner"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(msg, &env); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if env.Type != "member_profile_update" {
+			t.Errorf("type = %q, want member_profile_update", env.Type)
+		}
+		if int64(env.Payload.UserID) != 777 {
+			t.Errorf("payload.user_id = %d, want 777", int64(env.Payload.UserID))
+		}
+		if env.Payload.Username != "ProfileUser" {
+			t.Errorf("payload.username = %q, want ProfileUser", env.Payload.Username)
+		}
+		if env.Payload.Avatar == nil || *env.Payload.Avatar != avatar {
+			t.Errorf("payload.avatar = %v, want %q", env.Payload.Avatar, avatar)
+		}
+		if env.Payload.Banner == nil || *env.Payload.Banner != banner {
+			t.Errorf("payload.banner = %v, want %q", env.Payload.Banner, banner)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("client did not receive member_profile_update within timeout")
+	}
+}
+
+func TestHub_BroadcastMemberProfileUpdate_NoClients_NoPanic(t *testing.T) {
+	hub, _ := newServeHub(t)
+	hub.BroadcastMemberProfileUpdate(1, "user", nil, nil)
+}
+
 func TestHub_BroadcastChannelCreate_NoClients_NoPanic(t *testing.T) {
 	hub, _ := newServeHub(t)
 	hub.BroadcastChannelCreate(&db.Channel{ID: 1, Name: "x", Type: "text"})

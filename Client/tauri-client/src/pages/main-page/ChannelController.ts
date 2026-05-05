@@ -15,6 +15,7 @@ import { createMessageList } from "@components/MessageList";
 import type { MessageListComponent } from "@components/MessageList";
 import { createMessageInput } from "@components/MessageInput";
 import type { MessageInputComponent } from "@components/MessageInput";
+import type { Attachment } from "@lib/types";
 import { createTypingIndicator } from "@components/TypingIndicator";
 import { addPendingSend, getChannelMessages, setMessagePinned } from "@stores/messages.store";
 import type { MessageController } from "./MessageController";
@@ -27,6 +28,7 @@ import { membersStore } from "@stores/members.store";
 import { openUserProfile } from "@components/UserProfileOverlay";
 import { formatStatusForDmHeader } from "@lib/presence";
 import { createSelectionBar } from "@components/SelectionBar";
+import { encryptMessage, getPublicKey, hasKeyPair, isEncryptedContent } from "@lib/crypto";
 import type { SelectionBarControl } from "@components/SelectionBar";
 import { createForwardModal } from "@components/ForwardModal";
 import { clearSelection } from "@stores/selection.store";
@@ -214,30 +216,61 @@ export function createChannelController(
     messageInput = createMessageInput({
       channelId,
       channelName,
-      onSend: (content: string, replyTo: number | null, attachments: readonly string[]) => {
+      onSend: async (
+        content: string,
+        replyTo: number | null,
+        attachments: readonly string[],
+        attachmentMeta: readonly Attachment[],
+      ) => {
         if (ws.getState() !== "connected") {
           log.warn("Cannot send message: not connected");
           showToast("Not connected — message not sent", "error");
           return;
         }
+
+        let encryptedContent: string | undefined;
+        let senderPublicKey: string | undefined;
+
+        if (hasKeyPair()) {
+          const dmChannels = dmStore.getState().channels;
+          const dmChannel = dmChannels.find((c) => c.channelId === channelId);
+          if (dmChannel) {
+            const membersMap = membersStore.getState().members;
+            const membersArray = Array.from(membersMap.values());
+            const recipient = membersArray.find((m) => m.id === dmChannel.recipient.id);
+            if (recipient?.publicKey) {
+              try {
+                encryptedContent = await encryptMessage(content, recipient.publicKey);
+                senderPublicKey = getPublicKey() ?? undefined;
+              } catch (err) {
+                log.warn("Encryption failed, sending plain", { error: String(err) });
+              }
+            }
+          }
+        }
+
         const requestID = ws.send({
           type: "chat_send",
           payload: {
             channel_id: channelId,
-            content,
+            content: encryptedContent ? "[encrypted]" : content,
             reply_to: replyTo,
             attachments,
+            ...(encryptedContent && senderPublicKey
+              ? { encrypted_content: encryptedContent, sender_public_key: senderPublicKey }
+              : {}),
           },
         });
-        addPendingSend(requestID, channelId, content, replyTo, attachments);
+        addPendingSend(requestID, channelId, content, replyTo, attachments, attachmentMeta);
       },
       onUploadFile: async (file: File) => {
         try {
           const result = await api.uploadFile(file);
           return { id: result.id, url: result.url, filename: result.filename };
         } catch (err) {
-          log.error("File upload failed", { error: String(err) });
-          showToast("File upload failed", "error");
+          const msg = err instanceof Error ? err.message : "File upload failed";
+          log.error("File upload failed", { error: msg, filename: file.name, size: file.size });
+          showToast(msg, "error");
           throw err;
         }
       },
@@ -380,11 +413,13 @@ export function createChannelController(
         if (dmChannel === undefined) {
           return;
         }
+        const member = membersStore.getState().members.get(dmChannel.recipient.id);
         openUserProfile({
           id: dmChannel.recipient.id,
           profileId: dmChannel.recipient.profileId,
           username: dmChannel.recipient.username,
           avatar: dmChannel.recipient.avatar,
+          banner: dmChannel.recipient.banner ?? member?.banner ?? null,
           status: dmChannel.recipient.status,
           lastSeen: dmChannel.recipient.lastSeen ?? undefined,
         });

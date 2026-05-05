@@ -158,6 +158,29 @@ func (d *DB) UpdateUserTOTPSecret(id int64, secret *string) error {
 	return nil
 }
 
+// UpdateUserPublicKey sets or clears the H2H encryption public key for a user.
+func (d *DB) UpdateUserPublicKey(id int64, publicKey *string) error {
+	_, err := d.sqlDB.Exec(`UPDATE users SET public_key = ? WHERE id = ?`, publicKey, id)
+	if err != nil {
+		return fmt.Errorf("UpdateUserPublicKey: %w", err)
+	}
+	return nil
+}
+
+// GetUserPublicKey returns the public key for a user, or empty string if not set.
+// Returns nil if the user doesn't exist.
+func (d *DB) GetUserPublicKey(id int64) (*string, error) {
+	var pk *string
+	err := d.sqlDB.QueryRow(`SELECT public_key FROM users WHERE id = ?`, id).Scan(&pk)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetUserPublicKey: %w", err)
+	}
+	return pk, nil
+}
+
 // UpdateUserProfile updates one or more user profile fields.
 // Nil fields are ignored; non-nil fields are written as-is.
 func (d *DB) UpdateUserProfile(id int64, username, avatar, banner *string) error {
@@ -467,6 +490,7 @@ type MemberSummary struct {
 	ProfileID string  `json:"profile_id"`
 	Username  string  `json:"username"`
 	Avatar    *string `json:"avatar"`
+	Banner    *string `json:"banner"`
 	Status    string  `json:"status"`
 	Role      string  `json:"role"`
 	LastSeen  *string `json:"last_seen,omitempty"`
@@ -475,7 +499,7 @@ type MemberSummary struct {
 // ListMembers returns all non-banned users as lightweight summaries.
 func (d *DB) ListMembers() ([]MemberSummary, error) {
 	rows, err := d.sqlDB.Query(
-		`SELECT u.id, u.username, u.avatar, u.status, LOWER(r.name), u.last_seen
+		`SELECT u.id, u.username, u.avatar, u.banner, u.status, LOWER(r.name), u.last_seen
 		 FROM users u
 		 JOIN roles r ON u.role_id = r.id
 		 WHERE u.banned = 0
@@ -489,7 +513,7 @@ func (d *DB) ListMembers() ([]MemberSummary, error) {
 	var members []MemberSummary
 	for rows.Next() {
 		var m MemberSummary
-		if err := rows.Scan(&m.ID, &m.Username, &m.Avatar, &m.Status, &m.Role, &m.LastSeen); err != nil {
+		if err := rows.Scan(&m.ID, &m.Username, &m.Avatar, &m.Banner, &m.Status, &m.Role, &m.LastSeen); err != nil {
 			return nil, fmt.Errorf("ListMembers scan: %w", err)
 		}
 		m.ProfileID = FormatProfileID(m.ID)

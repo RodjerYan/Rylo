@@ -121,11 +121,12 @@ func run(log *slog.Logger, logBuf *admin.RingBuffer) error {
 	// ── 6. Start server ────────────────────────────────────────────────────
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      router,
-		TLSConfig:    tlsCfg,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		Addr:      addr,
+		Handler:   router,
+		TLSConfig: tlsCfg,
+		// Keep long enough for slow large attachment uploads (up to max_size_mb).
+		ReadTimeout:  5 * time.Minute,
+		WriteTimeout: 5 * time.Minute,
 		IdleTimeout:  120 * time.Second,
 		ErrorLog:     stdlog.New(io.Discard, "", 0), // suppress TLS handshake noise
 	}

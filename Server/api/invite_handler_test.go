@@ -21,7 +21,7 @@ func buildInviteRouter(database *db.DB, limiter *auth.RateLimiter) http.Handler 
 
 func buildInviteRouterWithReplicator(database *db.DB, limiter *auth.RateLimiter, replicator *inviteReplicatorStub) http.Handler {
 	r := chi.NewRouter()
-	api.MountAuthRoutes(r, database, limiter, nil, nil, config.RegistrationConfig{})
+	api.MountAuthRoutes(r, database, limiter, nil, nil, nil, config.RegistrationConfig{})
 	if replicator != nil {
 		api.MountInviteRoutes(r, database, replicator)
 	} else {
@@ -35,6 +35,7 @@ type inviteReplicatorStub struct {
 	sync    func(context.Context) error
 	mirror  func(context.Context, *db.Invite) error
 	revoke  func(context.Context, string) error
+	delete  func(context.Context, string) error
 }
 
 func (s *inviteReplicatorStub) Enabled() bool {
@@ -72,6 +73,16 @@ func (s *inviteReplicatorStub) RevokeInvite(ctx context.Context, code string) er
 		return nil
 	}
 	return s.revoke(ctx, code)
+}
+
+func (s *inviteReplicatorStub) DeleteInvite(ctx context.Context, code string) error {
+	if s == nil {
+		return nil
+	}
+	if s.delete == nil {
+		return nil
+	}
+	return s.delete(ctx, code)
 }
 
 // loginAndGetToken creates a user with a known password and returns their session token.
@@ -335,6 +346,50 @@ func TestRevokeInvite_MemberCanRevokeOwnInvite(t *testing.T) {
 
 	if rr2.Code != http.StatusNoContent {
 		t.Fatalf("RevokeInvite own member status = %d, want 204; body = %s", rr2.Code, rr2.Body.String())
+	}
+}
+
+func TestDeleteInvite_RemovesLocalAndRemote(t *testing.T) {
+	database := newAuthTestDB(t)
+	limiter := auth.NewRateLimiter()
+	var remoteDeleteCode string
+	replicator := &inviteReplicatorStub{
+		enabled: true,
+		delete: func(_ context.Context, code string) error {
+			remoteDeleteCode = code
+			return nil
+		},
+	}
+	router := buildInviteRouterWithReplicator(database, limiter, replicator)
+
+	token := loginAndGetToken(t, router, database, "invite-delete-owner", 2)
+
+	rr := postJSONWithToken(t, router, "/api/v1/invites", token, map[string]any{})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("Create invite for delete test: status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var created map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&created)
+	code := created["code"].(string)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/invites/"+code+"/delete", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.RemoteAddr = "127.0.0.1:9999"
+	rr2 := httptest.NewRecorder()
+	router.ServeHTTP(rr2, req)
+
+	if rr2.Code != http.StatusNoContent {
+		t.Fatalf("DeleteInvite status = %d, want 204; body = %s", rr2.Code, rr2.Body.String())
+	}
+	inv, err := database.GetInvite(code)
+	if err != nil {
+		t.Fatalf("GetInvite after delete: %v", err)
+	}
+	if inv != nil {
+		t.Fatalf("invite still exists locally after delete: %+v", inv)
+	}
+	if remoteDeleteCode != code {
+		t.Fatalf("remote delete code = %q, want %q", remoteDeleteCode, code)
 	}
 }
 

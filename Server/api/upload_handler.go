@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -13,6 +14,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -58,28 +60,53 @@ type selectDefaultBannerRequest struct {
 	Name     string `json:"name"`
 }
 
+const (
+	uploadMirrorAttemptTimeout    = 3 * time.Minute
+	uploadMirrorBackgroundRetries = 8
+	uploadMirrorBackgroundDelay   = 15 * time.Second
+)
+
 // MountUploadRoutes registers upload and file-serving endpoints.
 // allowedOrigins controls the Access-Control-Allow-Origin header on served files.
-func MountUploadRoutes(r chi.Router, database *db.DB, store *storage.Storage, allowedOrigins []string, replicator *replication.Replicator) {
-	// Upload requires authentication and a higher body size limit (100 MB).
+func MountUploadRoutes(
+	r chi.Router,
+	database *db.DB,
+	store *storage.Storage,
+	uploadMaxSizeMB int,
+	allowedOrigins []string,
+	replicator *replication.Replicator,
+	profileBroadcaster ProfileBroadcaster,
+) {
+	// Upload requires authentication and a higher body size limit.
+	maxUploadBytes := int64(uploadMaxSizeMB) * 1024 * 1024
+	if maxUploadBytes <= 0 {
+		maxUploadBytes = 100 << 20
+	}
+	// Add a small overhead allowance for multipart boundaries/headers.
+	maxUploadRequestBytes := maxUploadBytes + (2 << 20)
+
 	r.With(
 		AuthMiddleware(database),
-		MaxBodySize(100<<20),
+		MaxBodySize(maxUploadRequestBytes),
 	).Post("/api/v1/uploads", handleUpload(database, store, replicator))
+	r.With(
+		AuthMiddleware(database),
+		MaxBodySize(maxUploadRequestBytes),
+	).Post("/api/v1/uploads/raw", handleUploadRaw(database, store, replicator))
 
 	// Default avatars (stored in /RyloData/Avatars on Yandex Disk).
 	r.With(AuthMiddleware(database)).
 		Get("/api/v1/profile/default-avatars", handleListDefaultAvatars(replicator))
 	r.Get("/api/v1/profile/default-avatars/{category}/{name}", handleServeDefaultAvatarPreview(replicator))
 	r.With(AuthMiddleware(database)).
-		Post("/api/v1/profile/default-avatar", handleSelectDefaultAvatar(database, store, replicator))
+		Post("/api/v1/profile/default-avatar", handleSelectDefaultAvatar(database, store, replicator, profileBroadcaster))
 
 	// Default banners (stored in /RyloData/Banners on Yandex Disk).
 	r.With(AuthMiddleware(database)).
 		Get("/api/v1/profile/default-banners", handleListDefaultBanners(replicator))
 	r.Get("/api/v1/profile/default-banners/{category}/{name}", handleServeDefaultBannerPreview(replicator))
 	r.With(AuthMiddleware(database)).
-		Post("/api/v1/profile/default-banner", handleSelectDefaultBanner(database, store, replicator))
+		Post("/api/v1/profile/default-banner", handleSelectDefaultBanner(database, store, replicator, profileBroadcaster))
 
 	// File serving is public (URLs are unguessable UUIDs).
 	r.Get("/api/v1/files/{id}", handleServeFile(database, store, allowedOrigins, replicator))
@@ -109,27 +136,6 @@ func handleUpload(database *db.DB, store *storage.Storage, replicator *replicati
 		// Generate UUID for storage.
 		fileID := uuid.New().String()
 
-		// Detect MIME type from actual file bytes (never trust client header).
-		var sniffBuf [512]byte
-		n, readErr := file.Read(sniffBuf[:])
-		if readErr != nil && readErr.Error() != "EOF" && readErr.Error() != "unexpected EOF" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error":   "BAD_REQUEST",
-				"message": "failed to read uploaded file",
-			})
-			return
-		}
-		detectedMime := http.DetectContentType(sniffBuf[:n])
-		// Seek back so the full content is available for storage.
-		if _, seekErr := file.Seek(0, 0); seekErr != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{
-				"error":   "INTERNAL_ERROR",
-				"message": "failed to process uploaded file",
-			})
-			return
-		}
-		mime := detectedMime
-
 		// Store file on disk (validates file type via magic bytes).
 		if err := store.Save(fileID, file); err != nil {
 			slog.Warn("file upload rejected", "error", err)
@@ -140,25 +146,8 @@ func handleUpload(database *db.DB, store *storage.Storage, replicator *replicati
 			return
 		}
 
-		// Extract image dimensions if the file is an image.
-		var width, height *int
-		if strings.HasPrefix(mime, "image/") {
-			f, openErr := store.Open(fileID)
-			if openErr == nil {
-				cfg, _, decErr := image.DecodeConfig(f)
-				f.Close() //nolint:errcheck
-				if decErr == nil {
-					w2, h2 := cfg.Width, cfg.Height
-					width = &w2
-					height = &h2
-				} else {
-					slog.Warn("failed to decode image dimensions", "id", fileID, "error", decErr)
-				}
-			}
-		}
-
-		// Insert attachment record in DB (unlinked — message_id is NULL).
-		if err := database.CreateAttachment(fileID, header.Filename, fileID, mime, header.Size, width, height); err != nil {
+		resp, err := persistStoredAttachment(database, store, fileID, header.Filename)
+		if err != nil {
 			// Clean up stored file on DB failure.
 			_ = store.Delete(fileID)
 			slog.Error("failed to create attachment record", "error", err)
@@ -170,51 +159,207 @@ func handleUpload(database *db.DB, store *storage.Storage, replicator *replicati
 		}
 
 		if replicator != nil && replicator.Enabled() {
-			f, openErr := store.Open(fileID)
-			if openErr != nil {
-				_ = store.Delete(fileID)
-				_ = database.DeleteAttachmentRecord(fileID)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{
-					"error":   "INTERNAL_ERROR",
-					"message": "failed to mirror attachment",
-				})
-				return
-			}
-			data, readErr := io.ReadAll(f)
-			f.Close() //nolint:errcheck
-			var mirrorErr error
-			if readErr == nil {
-				mirrorErr = replicator.MirrorAttachment(r.Context(), fileID, data)
-			}
-			if readErr != nil || mirrorErr != nil {
-				if readErr != nil {
-					slog.Error("failed to read local attachment for mirroring", "id", fileID, "error", readErr)
-				}
-				if mirrorErr != nil {
-					slog.Error("failed to mirror attachment to Yandex Disk", "id", fileID, "error", mirrorErr)
-				}
-				_ = store.Delete(fileID)
-				_ = database.DeleteAttachmentRecord(fileID)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{
-					"error":   "INTERNAL_ERROR",
-					"message": "failed to mirror attachment",
-				})
-				return
-			}
+			// Never block upload success on remote mirror latency/errors.
+			// The local file+DB row already exist and can be used immediately.
+			scheduleAttachmentMirrorFromStore(replicator, store, fileID)
 		}
 
-		slog.Info("file uploaded", "id", fileID, "filename", header.Filename, "size", header.Size, "mime", mime)
-
-		writeJSON(w, http.StatusCreated, uploadResponse{
-			ID:       fileID,
-			Filename: header.Filename,
-			Size:     header.Size,
-			Mime:     mime,
-			URL:      "/api/v1/files/" + fileID,
-			Width:    width,
-			Height:   height,
-		})
+		slog.Info("file uploaded", "id", fileID, "filename", resp.Filename, "size", resp.Size, "mime", resp.Mime)
+		writeJSON(w, http.StatusCreated, resp)
 	}
+}
+
+func handleUploadRaw(database *db.DB, store *storage.Storage, replicator *replication.Replicator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fileID := uuid.New().String()
+		filename := r.URL.Query().Get("filename")
+		if filename == "" {
+			filename = r.Header.Get("X-Filename")
+		}
+		if filename == "" {
+			filename = "upload.bin"
+		}
+
+		if err := store.Save(fileID, r.Body); err != nil {
+			slog.Warn("raw upload rejected", "error", err)
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error":   "BAD_REQUEST",
+				"message": fmt.Sprintf("upload rejected: %s", err),
+			})
+			return
+		}
+
+		resp, err := persistStoredAttachment(database, store, fileID, filename)
+		if err != nil {
+			_ = store.Delete(fileID)
+			slog.Error("failed to create raw attachment record", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error":   "INTERNAL_ERROR",
+				"message": "failed to save attachment",
+			})
+			return
+		}
+
+		if replicator != nil && replicator.Enabled() {
+			scheduleAttachmentMirrorFromStore(replicator, store, fileID)
+		}
+
+		slog.Info("raw file uploaded", "id", fileID, "filename", resp.Filename, "size", resp.Size, "mime", resp.Mime)
+		writeJSON(w, http.StatusCreated, resp)
+	}
+}
+
+func sanitizeAttachmentFilename(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return "upload.bin"
+	}
+	return filepath.Base(trimmed)
+}
+
+func persistStoredAttachment(
+	database *db.DB,
+	store *storage.Storage,
+	fileID string,
+	filename string,
+) (uploadResponse, error) {
+	f, openErr := store.Open(fileID)
+	if openErr != nil {
+		return uploadResponse{}, openErr
+	}
+	defer f.Close() //nolint:errcheck
+
+	var sniffBuf [512]byte
+	n, readErr := f.Read(sniffBuf[:])
+	if readErr != nil && readErr != io.EOF {
+		return uploadResponse{}, readErr
+	}
+	detectedMime := http.DetectContentType(sniffBuf[:n])
+
+	size := int64(n)
+	if info, statErr := f.Stat(); statErr == nil {
+		size = info.Size()
+	}
+
+	if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+		return uploadResponse{}, seekErr
+	}
+
+	var width, height *int
+	if strings.HasPrefix(detectedMime, "image/") {
+		cfg, _, decErr := image.DecodeConfig(f)
+		if decErr == nil {
+			w2, h2 := cfg.Width, cfg.Height
+			width = &w2
+			height = &h2
+		} else {
+			slog.Warn("failed to decode image dimensions", "id", fileID, "error", decErr)
+		}
+	}
+
+	cleanFilename := sanitizeAttachmentFilename(filename)
+	if err := database.CreateAttachment(fileID, cleanFilename, fileID, detectedMime, size, width, height); err != nil {
+		return uploadResponse{}, err
+	}
+
+	return uploadResponse{
+		ID:       fileID,
+		Filename: cleanFilename,
+		Size:     size,
+		Mime:     detectedMime,
+		URL:      "/api/v1/files/" + fileID,
+		Width:    width,
+		Height:   height,
+	}, nil
+}
+
+func mirrorAttachmentWithRetry(
+	ctx context.Context,
+	replicator *replication.Replicator,
+	fileID string,
+	data []byte,
+	attempts int,
+	baseDelay time.Duration,
+) error {
+	if replicator == nil || !replicator.Enabled() {
+		return nil
+	}
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, uploadMirrorAttemptTimeout)
+		err := replicator.MirrorAttachment(attemptCtx, fileID, data)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+
+		if attempt >= attempts {
+			break
+		}
+		waitFor := time.Duration(attempt) * baseDelay
+		if waitFor <= 0 {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(waitFor):
+		}
+	}
+	return lastErr
+}
+
+func scheduleAttachmentMirrorRetry(
+	replicator *replication.Replicator,
+	fileID string,
+	data []byte,
+) {
+	if replicator == nil || !replicator.Enabled() {
+		return
+	}
+	go func() {
+		if err := mirrorAttachmentWithRetry(
+			context.Background(),
+			replicator,
+			fileID,
+			data,
+			uploadMirrorBackgroundRetries,
+			uploadMirrorBackgroundDelay,
+		); err != nil {
+			slog.Error("background attachment mirror failed", "id", fileID, "error", err)
+		} else {
+			slog.Info("attachment mirrored in background", "id", fileID)
+		}
+	}()
+}
+
+func scheduleAttachmentMirrorFromStore(
+	replicator *replication.Replicator,
+	store *storage.Storage,
+	fileID string,
+) {
+	if replicator == nil || !replicator.Enabled() || store == nil {
+		return
+	}
+	go func() {
+		f, openErr := store.Open(fileID)
+		if openErr != nil {
+			slog.Error("background mirror: failed to open local attachment", "id", fileID, "error", openErr)
+			return
+		}
+		data, readErr := io.ReadAll(f)
+		f.Close() //nolint:errcheck
+		if readErr != nil {
+			slog.Error("background mirror: failed to read local attachment", "id", fileID, "error", readErr)
+			return
+		}
+		scheduleAttachmentMirrorRetry(replicator, fileID, data)
+	}()
 }
 
 func handleServeFile(database *db.DB, store *storage.Storage, allowedOrigins []string, replicator *replication.Replicator) http.HandlerFunc {
@@ -236,8 +381,27 @@ func handleServeFile(database *db.DB, store *storage.Storage, allowedOrigins []s
 			return
 		}
 		if att == nil {
-			http.NotFound(w, r)
-			return
+			if replicator == nil || !replicator.Enabled() {
+				http.NotFound(w, r)
+				return
+			}
+			if hydrateErr := hydrateMissingAttachmentFromReplicatedBlob(r.Context(), database, store, replicator, fileID); hydrateErr != nil {
+				http.NotFound(w, r)
+				return
+			}
+			att, err = database.GetAttachmentByID(fileID)
+			if err != nil {
+				slog.Error("failed to look up hydrated attachment", "id", fileID, "error", err)
+				writeJSON(w, http.StatusInternalServerError, errorResponse{
+					Error:   "INTERNAL_ERROR",
+					Message: "internal server error",
+				})
+				return
+			}
+			if att == nil {
+				http.NotFound(w, r)
+				return
+			}
 		}
 
 		// Open file from storage.
@@ -354,7 +518,12 @@ func handleServeDefaultAvatarPreview(replicator *replication.Replicator) http.Ha
 	}
 }
 
-func handleSelectDefaultAvatar(database *db.DB, store *storage.Storage, replicator *replication.Replicator) http.HandlerFunc {
+func handleSelectDefaultAvatar(
+	database *db.DB,
+	store *storage.Storage,
+	replicator *replication.Replicator,
+	profileBroadcaster ProfileBroadcaster,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if replicator == nil || !replicator.Enabled() {
 			writeJSON(w, http.StatusServiceUnavailable, errorResponse{
@@ -462,6 +631,11 @@ func handleSelectDefaultAvatar(database *db.DB, store *storage.Storage, replicat
 			return
 		}
 
+		if mirrorErr := replicator.MirrorProfileUpdate(r.Context(), user.Username, updated); mirrorErr != nil {
+			slog.Warn("failed to publish avatar profile update", "user_id", user.ID, "error", mirrorErr)
+		}
+		broadcastMemberProfileUpdate(profileBroadcaster, updated)
+
 		writeJSON(w, http.StatusOK, toUserResponse(updated))
 	}
 }
@@ -537,7 +711,12 @@ func handleServeDefaultBannerPreview(replicator *replication.Replicator) http.Ha
 	}
 }
 
-func handleSelectDefaultBanner(database *db.DB, store *storage.Storage, replicator *replication.Replicator) http.HandlerFunc {
+func handleSelectDefaultBanner(
+	database *db.DB,
+	store *storage.Storage,
+	replicator *replication.Replicator,
+	profileBroadcaster ProfileBroadcaster,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if replicator == nil || !replicator.Enabled() {
 			writeJSON(w, http.StatusServiceUnavailable, errorResponse{
@@ -651,6 +830,66 @@ func handleSelectDefaultBanner(database *db.DB, store *storage.Storage, replicat
 			})
 			return
 		}
+
+		if mirrorErr := replicator.MirrorProfileUpdate(r.Context(), user.Username, updated); mirrorErr != nil {
+			slog.Warn("failed to publish banner profile update", "user_id", user.ID, "error", mirrorErr)
+		}
+		broadcastMemberProfileUpdate(profileBroadcaster, updated)
+
 		writeJSON(w, http.StatusOK, toUserResponse(updated))
 	}
+}
+
+func hydrateMissingAttachmentFromReplicatedBlob(
+	ctx context.Context,
+	database *db.DB,
+	store *storage.Storage,
+	replicator *replication.Replicator,
+	fileID string,
+) error {
+	if replicator == nil || !replicator.Enabled() {
+		return fmt.Errorf("replication disabled")
+	}
+	if err := replicator.EnsureLocalAttachment(ctx, fileID, store); err != nil {
+		return err
+	}
+
+	f, err := store.Open(fileID)
+	if err != nil {
+		return err
+	}
+	defer f.Close() //nolint:errcheck
+
+	var sniff [512]byte
+	n, readErr := f.Read(sniff[:])
+	if readErr != nil && readErr != io.EOF {
+		return readErr
+	}
+	mimeType := http.DetectContentType(sniff[:n])
+	size := int64(n)
+	if info, statErr := f.Stat(); statErr == nil {
+		size = info.Size()
+	}
+
+	if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+		return seekErr
+	}
+
+	var width, height *int
+	if strings.HasPrefix(mimeType, "image/") {
+		cfg, _, decodeErr := image.DecodeConfig(f)
+		if decodeErr == nil {
+			w2, h2 := cfg.Width, cfg.Height
+			width = &w2
+			height = &h2
+		}
+	}
+
+	if err := database.CreateAttachment(fileID, fileID, fileID, mimeType, size, width, height); err != nil {
+		if db.IsUniqueConstraintError(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

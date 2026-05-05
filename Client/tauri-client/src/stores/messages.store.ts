@@ -42,7 +42,8 @@ interface PendingSend {
   readonly channelId: number;
   readonly content: string;
   readonly replyTo: number | null;
-  readonly attachments: readonly string[];
+  readonly attachmentIDs: readonly string[];
+  readonly attachmentMeta: readonly Attachment[];
   readonly createdAt: string;
   readonly localId: number;
   readonly user: MessageUser;
@@ -136,7 +137,7 @@ function findMatchingPendingSend(
     if (pending.replyTo !== incoming.replyTo) {
       continue;
     }
-    if (!attachmentsMatch(pending.attachments, incoming.attachments)) {
+    if (!attachmentsMatch(pending.attachmentIDs, incoming.attachments)) {
       continue;
     }
     if (pending.localId > matchedLocalId) {
@@ -154,7 +155,7 @@ function pendingToMessage(pending: PendingSend): Message {
     user: pending.user,
     content: pending.content,
     replyTo: pending.replyTo,
-    attachments: [],
+    attachments: pending.attachmentMeta,
     reactions: [],
     pinned: false,
     editedAt: null,
@@ -410,6 +411,7 @@ export function addPendingSend(
   content = "",
   replyTo: number | null = null,
   attachments: readonly string[] = [],
+  attachmentMeta: readonly Attachment[] = [],
 ): void {
   const me = authStore.getState().user;
   const pendingUser: MessageUser = {
@@ -422,7 +424,8 @@ export function addPendingSend(
     channelId,
     content,
     replyTo,
-    attachments: [...attachments],
+    attachmentIDs: [...attachments],
+    attachmentMeta: [...attachmentMeta],
     createdAt: new Date().toISOString(),
     localId: nextPendingLocalId,
     user: pendingUser,
@@ -560,6 +563,79 @@ export function updateReaction(
     const updatedMessages = new Map(prev.messagesByChannel);
     updatedMessages.set(payload.channel_id, updatedList);
     return { ...prev, messagesByChannel: updatedMessages };
+  });
+}
+
+/** Update cached message author snapshots after profile changes. */
+export function updateMessageAuthorProfile(
+  userId: number,
+  profile: { readonly username: string; readonly avatar: string | null },
+): void {
+  messagesStore.setState((prev) => {
+    let messagesChanged = false;
+    const nextMessagesByChannel = new Map<number, readonly Message[]>();
+    for (const [channelId, messages] of prev.messagesByChannel) {
+      let channelChanged = false;
+      const updated = messages.map((msg) => {
+        if (msg.user.id !== userId) {
+          return msg;
+        }
+        if (msg.user.username === profile.username && (msg.user.avatar ?? null) === (profile.avatar ?? null)) {
+          return msg;
+        }
+        channelChanged = true;
+        const nextUser: MessageUser = {
+          ...msg.user,
+          username: profile.username,
+          avatar: profile.avatar,
+        };
+        return { ...msg, user: nextUser };
+      });
+      if (channelChanged) {
+        messagesChanged = true;
+        nextMessagesByChannel.set(channelId, updated);
+      }
+    }
+
+    let pendingChanged = false;
+    const nextPendingMessages = new Map(prev.pendingMessages);
+    for (const [correlationId, pending] of prev.pendingMessages) {
+      if (pending.user.id !== userId) {
+        continue;
+      }
+      if (pending.user.username === profile.username && (pending.user.avatar ?? null) === (profile.avatar ?? null)) {
+        continue;
+      }
+      pendingChanged = true;
+      nextPendingMessages.set(correlationId, {
+        ...pending,
+        user: {
+          ...pending.user,
+          username: profile.username,
+          avatar: profile.avatar,
+        },
+      });
+    }
+
+    if (!messagesChanged && !pendingChanged) {
+      return prev;
+    }
+
+    const updatedMessagesByChannel = messagesChanged
+      ? (() => {
+          const merged = new Map(prev.messagesByChannel);
+          for (const [channelId, messages] of nextMessagesByChannel) {
+            merged.set(channelId, messages);
+          }
+          return merged;
+        })()
+      : prev.messagesByChannel;
+
+    return {
+      ...prev,
+      messagesByChannel: updatedMessagesByChannel,
+      pendingMessages: pendingChanged ? nextPendingMessages : prev.pendingMessages,
+    };
   });
 }
 

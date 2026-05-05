@@ -133,6 +133,7 @@ export interface InviteManagerController {
 export function createInviteManagerController(opts: {
   readonly api: ApiClient;
   readonly getRoot: () => HTMLDivElement | null;
+  readonly username: string;
 
 }): InviteManagerController {
   let instance: MountableComponent | null = null;
@@ -149,6 +150,7 @@ export function createInviteManagerController(opts: {
     if (instance !== null || root === null) return;
     const inviteManager = createInviteManager({
       invites: [],
+      username: opts.username,
       loading: true,
       onCreateInvite: async () => {
         const created = await opts.api.createInvite({});
@@ -159,6 +161,15 @@ export function createInviteManagerController(opts: {
           await opts.api.revokeInvite(code);
         } catch (err) {
           log.error("Invite revoke failed", { code, error: String(err) });
+          throw err;
+        }
+      },
+      onDeleteInvite: async (code: string) => {
+        try {
+          await opts.api.deleteInvite(code);
+          showToast("Приглашение удалено", "success");
+        } catch (err) {
+          log.error("Invite delete failed", { code, error: String(err) });
           throw err;
         }
       },

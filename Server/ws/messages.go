@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/rylo/server/db"
 )
@@ -33,11 +34,13 @@ type presencePayload struct {
 }
 
 type memberUserPayload struct {
-	ID        int64   `json:"id"`
-	ProfileID string  `json:"profile_id,omitempty"`
-	Username  string  `json:"username"`
-	Avatar    *string `json:"avatar"`
-	Role      string  `json:"role"`
+	ID         int64   `json:"id"`
+	ProfileID  string  `json:"profile_id,omitempty"`
+	Username   string  `json:"username"`
+	Avatar     *string `json:"avatar"`
+	Banner     *string `json:"banner,omitempty"`
+	Role       string  `json:"role"`
+	PublicKey  *string `json:"public_key,omitempty"`
 }
 
 type memberJoinPayload struct {
@@ -60,6 +63,13 @@ type chatMessagePayload struct {
 type memberUpdatePayload struct {
 	UserID int64  `json:"user_id"`
 	Role   string `json:"role"`
+}
+
+type memberProfileUpdatePayload struct {
+	UserID   int64   `json:"user_id"`
+	Username string  `json:"username"`
+	Avatar   *string `json:"avatar"`
+	Banner   *string `json:"banner"`
 }
 
 type memberBanPayload struct {
@@ -160,6 +170,7 @@ type dmUserPayload struct {
 	ProfileID string  `json:"profile_id,omitempty"`
 	Username  string  `json:"username"`
 	Avatar    string  `json:"avatar"`
+	Banner    string  `json:"banner,omitempty"`
 	Status    string  `json:"status"`
 	LastSeen  *string `json:"last_seen,omitempty"`
 }
@@ -234,7 +245,8 @@ func buildMemberJoin(user *db.User, roleName string) []byte {
 				ID:        user.ID,
 				ProfileID: db.FormatProfileID(user.ID),
 				Username:  user.Username,
-				Avatar:    user.Avatar,
+				Avatar:    normalizeProfileMediaForWS(user.Avatar),
+				Banner:    normalizeProfileMediaForWS(user.Banner),
 				Role:      roleName,
 			},
 		},
@@ -243,7 +255,7 @@ func buildMemberJoin(user *db.User, roleName string) []byte {
 
 // buildChatMessage constructs a chat_message broadcast envelope.
 // Includes role in user object and empty reactions array for consistency with REST API.
-func buildChatMessage(msgID, channelID, userID int64, username string, avatar *string, roleName string, content string, timestamp string, replyTo *int64, attachments []map[string]any, sourceServer string) []byte {
+func buildChatMessage(msgID, channelID, userID int64, username string, avatar *string, roleName string, content string, timestamp string, replyTo *int64, attachments []map[string]any, sourceServer string, publicKey *string) []byte {
 	if attachments == nil {
 		attachments = []map[string]any{}
 	}
@@ -253,10 +265,11 @@ func buildChatMessage(msgID, channelID, userID int64, username string, avatar *s
 			ID:        msgID,
 			ChannelID: channelID,
 			User: memberUserPayload{
-				ID:       userID,
-				Username: username,
-				Avatar:   avatar,
-				Role:     roleName,
+				ID:        userID,
+				Username:  username,
+				Avatar:    avatar,
+				Role:      roleName,
+				PublicKey: publicKey,
 			},
 			Content:      content,
 			ReplyTo:      replyTo,
@@ -277,6 +290,30 @@ func buildMemberUpdate(userID int64, roleName string) []byte {
 	})
 }
 
+func normalizeProfileMediaForWS(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	if strings.TrimSpace(*value) == "" {
+		return nil
+	}
+	return value
+}
+
+// buildMemberProfileUpdate constructs a member_profile_update broadcast for
+// real-time avatar/banner/username propagation.
+func buildMemberProfileUpdate(userID int64, username string, avatar, banner *string) []byte {
+	return buildJSON(wsMsg{
+		Type: MsgTypeMemberProfile,
+		Payload: memberProfileUpdatePayload{
+			UserID:   userID,
+			Username: strings.TrimSpace(username),
+			Avatar:   normalizeProfileMediaForWS(avatar),
+			Banner:   normalizeProfileMediaForWS(banner),
+		},
+	})
+}
+
 // buildMemberBan constructs a member_ban broadcast per PROTOCOL.md.
 func buildMemberBan(userID int64) []byte {
 	return buildJSON(wsMsg{
@@ -291,6 +328,14 @@ func buildChatSendOK(requestID string, msgID int64, timestamp string) []byte {
 		Type:    MsgTypeChatSendOK,
 		ID:      requestID,
 		Payload: chatSendOKPayload{MessageID: msgID, Timestamp: timestamp},
+	})
+}
+
+// buildAckMsg constructs an empty ack response for request-response patterns.
+func buildAckMsg(requestID string) []byte {
+	return buildJSON(wsMsg{
+		Type: "ok",
+		ID:   requestID,
 	})
 }
 
@@ -446,6 +491,10 @@ func buildDMChannelOpen(channelID int64, recipient *db.User) []byte {
 	if recipient.Avatar != nil {
 		avatarStr = *recipient.Avatar
 	}
+	bannerStr := ""
+	if recipient.Banner != nil {
+		bannerStr = *recipient.Banner
+	}
 	return buildJSON(wsMsg{
 		Type: MsgTypeDMChannelOpen,
 		Payload: dmChannelOpenPayload{
@@ -455,6 +504,7 @@ func buildDMChannelOpen(channelID int64, recipient *db.User) []byte {
 				ProfileID: db.FormatProfileID(recipient.ID),
 				Username:  recipient.Username,
 				Avatar:    avatarStr,
+				Banner:    bannerStr,
 				Status:    recipient.Status,
 				LastSeen:  recipient.LastSeen,
 			},

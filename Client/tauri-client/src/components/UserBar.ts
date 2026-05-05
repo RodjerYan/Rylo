@@ -11,6 +11,7 @@ import { authStore } from "@stores/auth.store";
 import { openSettings } from "@stores/ui.store";
 import { openUserProfile } from "@components/UserProfileOverlay";
 import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
+import { normalizeProfileMedia } from "@lib/profile-media";
 import { formatStatusRu, getStatusIndicatorModifier, normalizeUserStatus } from "@lib/presence";
 import { getDisplayProfileId } from "@lib/profileId";
 
@@ -130,9 +131,8 @@ export function createUserBar(options?: UserBarOptions): MountableComponent {
         id: user.id,
         profileId: user.profile_id,
         username: user.username,
-        avatar: user.avatar ?? null,
-        banner: user.banner ?? null,
-        role: user.role,
+        avatar: normalizeProfileMedia(user.avatar),
+        banner: normalizeProfileMedia(user.banner),
       });
     });
     disposable.onEvent(profileClickableArea, "keydown", (event: KeyboardEvent) => {

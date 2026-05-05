@@ -35,7 +35,7 @@ func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.Ri
 	r.Use(middleware.Recoverer)
 	r.Use(requestLogger) // structured request/response logging
 	r.Use(SecurityHeadersWithTLS(cfg.TLS.Mode))
-	r.Use(MaxBodySizeUnless(1<<20, "/api/v1/uploads")) // 1 MiB default; upload route exempt
+	r.Use(MaxBodySizeUnless(1<<20, "/api/v1/uploads", "/api/v1/uploads/raw")) // 1 MiB default; upload routes exempt
 
 	// Health check — unauthenticated, no versioning prefix.
 	// The online user count callback is set after hub creation below.
@@ -55,6 +55,17 @@ func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.Ri
 	limiterStopCh := make(chan struct{})
 	go limiter.StartCleanup(5*time.Minute, 15*time.Minute, limiterStopCh)
 
+	// WebSocket hub — WS does its own in-band auth, so no AuthMiddleware here.
+	hub := ws.NewHub(database, limiter)
+	hub.SetReplicator(replicator)
+	if replicator != nil {
+		replicator.SetImportedMessageHook(hub.HandleReplicatedMessage)
+		replicator.SetImportedDeleteHook(hub.HandleReplicatedDelete)
+		replicator.SetImportedPresenceHook(hub.HandleReplicatedPresence)
+		replicator.SetImportedProfileHook(hub.HandleReplicatedProfileUpdate)
+	}
+	getOnlineUsers = func() int { return hub.ClientCount() }
+
 	// Versioned API routes.
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", handleHealth(ver, func() int {
@@ -67,7 +78,7 @@ func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.Ri
 	})
 
 	// Auth routes: register, login, logout, me.
-	MountAuthRoutes(r, database, limiter, cfg.Server.TrustedProxies, replicator, cfg.Registration)
+	MountAuthRoutes(r, database, limiter, cfg.Server.TrustedProxies, replicator, hub, cfg.Registration)
 
 	// Invite management routes (require MANAGE_INVITES permission).
 	MountInviteRoutes(r, database, replicator)
@@ -83,18 +94,8 @@ func NewRouter(cfg *config.Config, database *db.DB, ver string, logBuf *admin.Ri
 	if storeErr != nil {
 		slog.Error("failed to create file storage", "error", storeErr)
 	} else {
-		MountUploadRoutes(r, database, store, cfg.Server.AllowedOrigins, replicator)
+		MountUploadRoutes(r, database, store, cfg.Upload.MaxSizeMB, cfg.Server.AllowedOrigins, replicator, hub)
 	}
-
-	// WebSocket hub — WS does its own in-band auth, so no AuthMiddleware here.
-	hub := ws.NewHub(database, limiter)
-	hub.SetReplicator(replicator)
-	if replicator != nil {
-		replicator.SetImportedMessageHook(hub.HandleReplicatedMessage)
-		replicator.SetImportedDeleteHook(hub.HandleReplicatedDelete)
-		replicator.SetImportedPresenceHook(hub.HandleReplicatedPresence)
-	}
-	getOnlineUsers = func() int { return hub.ClientCount() }
 
 	// Create LiveKit client if voice config is present; voice is disabled on failure.
 	lk, lkErr := ws.NewLiveKitClient(&cfg.Voice)

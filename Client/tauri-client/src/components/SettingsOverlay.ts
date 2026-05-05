@@ -1,6 +1,6 @@
 /**
  * SettingsOverlay component — full-screen overlay with tabbed settings panels.
- * Tabs: Account, Appearance, Notifications, Text & Images, Accessibility, Voice & Audio, Keybinds, Advanced, Logs.
+ * Tabs: Account, Security, Appearance, Notifications, Text & Images, Accessibility, Voice & Audio, Keybinds, Advanced, Logs.
  * Subscribes to uiStore for settingsOpen state.
  */
 
@@ -16,6 +16,7 @@ import type { ThemeName } from "./settings/helpers";
 import { getActiveThemeName, restoreTheme } from "@lib/themes";
 import { syncOsMotionListener } from "@lib/os-motion";
 import { buildAccountTab } from "./settings/AccountTab";
+import { buildSecurityTab } from "./settings/SecurityTab";
 import { buildAppearanceTab } from "./settings/AppearanceTab";
 import { buildNotificationsTab } from "./settings/NotificationsTab";
 import { buildTextImagesTab } from "./settings/TextImagesTab";
@@ -50,10 +51,11 @@ export interface SettingsOverlayOptions {
   isAuthenticated?: boolean;
 }
 
-export type TabName = "Account" | "Appearance" | "Notifications" | "Text & Images" | "Accessibility" | "Voice & Audio" | "Keybinds" | "Advanced" | "Logs";
+export type TabName = "Account" | "Security" | "Appearance" | "Notifications" | "Text & Images" | "Accessibility" | "Voice & Audio" | "Keybinds" | "Advanced" | "Logs";
 
 const TAB_ICONS: Record<TabName, IconName> = {
   Account: "user",
+  Security: "check-square",
   Appearance: "palette",
   Notifications: "bell",
   "Text & Images": "image",
@@ -131,6 +133,7 @@ export function createSettingsOverlay(
 
   const TAB_BUILDERS: Readonly<Record<TabName, () => HTMLDivElement>> = {
     Account: () => buildAccountTab(options, ac.signal),
+    Security: () => buildSecurityTab(options, ac.signal),
     Appearance: () => buildAppearanceTab(ac.signal),
     Notifications: () => buildNotificationsTab(ac.signal),
     "Text & Images": () => buildTextImagesTab(ac.signal),
@@ -246,21 +249,24 @@ export function createSettingsOverlay(
     appendChildren(profileSection, avatarEl, profileInfo);
     sidebar.appendChild(profileSection);
 
-    // "User Settings" category — only Account belongs here (hidden when not authenticated)
+    // "User Settings" category — Account + Security (hidden when not authenticated)
     if (authenticated) {
       const userSettingsCat = createElement("div", { class: "settings-cat" }, "User Settings");
       sidebar.appendChild(userSettingsCat);
 
-      const accountBtn = createElement("button", {
-        class: `settings-nav-item${activeTab === "Account" ? " active" : ""}`,
-        role: "tab",
-        "aria-selected": activeTab === "Account" ? "true" : "false",
-      });
-      accountBtn.prepend(createIcon(TAB_ICONS["Account"], 18));
-      accountBtn.appendChild(document.createTextNode("Account"));
-      accountBtn.addEventListener("click", () => setActiveTab("Account"), { signal: ac.signal });
-      tabButtons.set("Account", accountBtn);
-      sidebar.appendChild(accountBtn);
+      const userTabs: readonly TabName[] = ["Account", "Security"];
+      for (const name of userTabs) {
+        const btn = createElement("button", {
+          class: `settings-nav-item${name === activeTab ? " active" : ""}`,
+          role: "tab",
+          "aria-selected": name === activeTab ? "true" : "false",
+        });
+        btn.prepend(createIcon(TAB_ICONS[name], 18));
+        btn.appendChild(document.createTextNode(name));
+        btn.addEventListener("click", () => setActiveTab(name), { signal: ac.signal });
+        tabButtons.set(name, btn);
+        sidebar.appendChild(btn);
+      }
     }
 
     // "App Settings" category — remaining tabs

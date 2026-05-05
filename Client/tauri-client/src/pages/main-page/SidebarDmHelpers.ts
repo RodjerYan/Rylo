@@ -12,6 +12,7 @@ import type { Channel } from "@stores/channels.store";
 import { dmStore, clearDmUnread, addDmChannel } from "@stores/dm.store";
 import type { DmChannel } from "@stores/dm.store";
 import { membersStore } from "@stores/members.store";
+import { normalizeProfileMedia } from "@lib/profile-media";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -102,7 +103,8 @@ export async function handleCreateDm(
         id: result.recipient.id,
         profileId: result.recipient.profile_id,
         username: result.recipient.username,
-        avatar: result.recipient.avatar,
+        avatar: normalizeProfileMedia(result.recipient.avatar),
+        banner: normalizeProfileMedia(result.recipient.banner) ?? member?.banner ?? null,
         status: result.recipient.status ?? member?.status ?? "offline",
         lastSeen: result.recipient.last_seen ?? member?.lastSeen ?? null,
       },

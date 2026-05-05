@@ -1,5 +1,5 @@
 /**
- * Account settings tab — profile editing, password change.
+ * Account settings tab — profile editing only.
  * Discord-style profile card with colored banner, overlapping avatar,
  * and separated field rows.
  */
@@ -258,7 +258,7 @@ function applyProfileBanner(target: HTMLDivElement, bannerUrl: string | null): v
 // Password section builder
 // ---------------------------------------------------------------------------
 
-function buildPasswordSection(
+export function buildPasswordSection(
   options: SettingsOverlayOptions,
   signal: AbortSignal,
 ): HTMLDivElement {
@@ -543,7 +543,7 @@ function buildTotpDisableView(
   return wrapper;
 }
 
-function buildTotpSection(
+export function buildTotpSection(
   options: SettingsOverlayOptions,
   signal: AbortSignal,
 ): HTMLDivElement {
@@ -680,7 +680,7 @@ function buildStatusSelector(
 // Delete account (danger zone) builder
 // ---------------------------------------------------------------------------
 
-function buildDeleteAccountSection(
+export function buildDeleteAccountSection(
   options: SettingsOverlayOptions,
   signal: AbortSignal,
 ): HTMLDivElement {
@@ -820,11 +820,13 @@ export function buildAccountTab(
   section.appendChild(buildStatusSelector(options, signal));
 
   // Inline edit form
-  const editForm = createElement("div", { class: "setting-row", style: "display:none;margin-bottom:16px" });
+  const editForm = createElement("div", { class: "setting-row account-username-edit-row", style: "display:none;margin-bottom:16px" });
   const editInput = createElement("input", { class: "form-input", type: "text", placeholder: "Новое имя пользователя" });
   const saveBtn = createElement("button", { class: "ac-btn" }, "Сохранить");
   const cancelBtn = createElement("button", { class: "ac-btn", style: "background:var(--bg-active)" }, "Отмена");
-  appendChildren(editForm, editInput, saveBtn, cancelBtn);
+  const actions = createElement("div", { class: "account-username-edit-actions" });
+  appendChildren(actions, saveBtn, cancelBtn);
+  appendChildren(editForm, editInput, actions);
 
   const usernameError = createElement("div", { style: "color:var(--red);font-size:13px;margin-top:4px" });
   editForm.appendChild(usernameError);
@@ -1572,18 +1574,21 @@ export function buildAccountTab(
       class: "ac-btn",
       type: "button",
       style: "margin-left:0;",
-    }, "РЎРѕС…СЂР°РЅРёС‚СЊ") as HTMLButtonElement;
+    }, "Сохранить") as HTMLButtonElement;
     saveBtn.disabled = true;
     closeBtn.addEventListener("click", closeModal, { signal: modalSignal.signal });
     saveBtn.addEventListener("click", () => {
       if (selectedCategory === null || selectedAvatarName === null || selectedPreviewUrl === null) {
         return;
       }
-      saveBtn.disabled = true;
+saveBtn.disabled = true;
       closeBtn.disabled = true;
+      const originalText = saveBtn.textContent;
+      saveBtn.innerHTML = '<span class="spinner-inline"></span> Применение...';
       void selectDefaultAvatar(selectedCategory, selectedAvatarName, selectedPreviewUrl).then(() => {
         closeModal();
       }).catch(() => {
+        saveBtn.textContent = originalText;
         saveBtn.disabled = false;
         closeBtn.disabled = false;
       });
@@ -1988,15 +1993,6 @@ export function buildAccountTab(
   }, { signal });
 
   syncMediaControlsAvailability();
-
-  // Password section
-  section.appendChild(buildPasswordSection(options, signal));
-
-  // Two-factor authentication section
-  section.appendChild(buildTotpSection(options, signal));
-
-  // Delete account (danger zone)
-  section.appendChild(buildDeleteAccountSection(options, signal));
 
   return section;
 }

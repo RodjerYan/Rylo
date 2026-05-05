@@ -26,6 +26,7 @@ type Client struct {
 	channelID     int64     // currently viewed channel for channel-scoped broadcasts
 	voiceChID     int64     // voice channel the user is in (0 = not in voice); guarded by voiceMu
 	roleName      string    // cached role name for chat_message broadcasts
+	publicKey     string    // H2H encryption public key for this session
 	connectedHost string    // host:port used by this client to connect to the server
 	tokenHash     string    // SHA-256 hex of the session token; used for periodic revalidation
 	connectedAt   time.Time // when the WS connection was established

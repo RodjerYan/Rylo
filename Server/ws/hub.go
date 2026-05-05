@@ -382,6 +382,12 @@ func (h *Hub) BroadcastMemberUpdate(userID int64, roleName string) {
 	h.BroadcastToAll(buildMemberUpdate(userID, roleName))
 }
 
+// BroadcastMemberProfileUpdate sends a member_profile_update message to all
+// connected clients.
+func (h *Hub) BroadcastMemberProfileUpdate(userID int64, username string, avatar, banner *string) {
+	h.BroadcastToAll(buildMemberProfileUpdate(userID, username, avatar, banner))
+}
+
 // SendToUser delivers msg directly to the client identified by userID.
 // Returns true if the client was found and the message was queued.
 func (h *Hub) SendToUser(userID int64, msg []byte) bool {

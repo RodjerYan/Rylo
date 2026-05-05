@@ -94,7 +94,15 @@ type totpEnableResponse struct {
 // Rate limiters are applied per-endpoint as specified. trustedProxies is the
 // list of CIDRs whose X-Forwarded-For / X-Real-IP headers are honoured for
 // rate-limiting IP resolution.
-func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, trustedProxies []string, replicator *replication.Replicator, registrationCfg config.RegistrationConfig) {
+func MountAuthRoutes(
+	r chi.Router,
+	database *db.DB,
+	limiter *auth.RateLimiter,
+	trustedProxies []string,
+	replicator *replication.Replicator,
+	profileBroadcaster ProfileBroadcaster,
+	registrationCfg config.RegistrationConfig,
+) {
 	registerLimiter := limiter
 	loginLimiter := limiter
 	partialStore := auth.NewPartialAuthStore(10 * time.Minute)
@@ -127,7 +135,7 @@ func MountAuthRoutes(r chi.Router, database *db.DB, limiter *auth.RateLimiter, t
 
 	r.With(AuthMiddleware(database),
 		RateLimitMiddleware(limiter, 10, time.Minute, trustedProxies)).
-		Patch("/api/v1/users/me", handleUpdateProfile(database, replicator))
+		Patch("/api/v1/users/me", handleUpdateProfile(database, replicator, profileBroadcaster))
 
 	r.With(AuthMiddleware(database),
 		RateLimitMiddleware(limiter, 5, time.Minute, trustedProxies)).
@@ -716,7 +724,7 @@ func handleDisableTOTP(database *db.DB, pendingStore *auth.PendingTOTPStore) htt
 	}
 }
 
-func handleUpdateProfile(database *db.DB, replicator *replication.Replicator) http.HandlerFunc {
+func handleUpdateProfile(database *db.DB, replicator *replication.Replicator, profileBroadcaster ProfileBroadcaster) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := r.Context().Value(UserKey).(*db.User)
 		if !ok || user == nil {
@@ -802,6 +810,14 @@ func handleUpdateProfile(database *db.DB, replicator *replication.Replicator) ht
 			})
 			return
 		}
+
+		if replicator != nil && replicator.Enabled() {
+			if mirrorErr := replicator.MirrorProfileUpdate(r.Context(), user.Username, updated); mirrorErr != nil {
+				slog.Warn("failed to publish profile update to Yandex Disk", "user_id", user.ID, "error", mirrorErr)
+			}
+		}
+		broadcastMemberProfileUpdate(profileBroadcaster, updated)
+
 		writeJSON(w, http.StatusOK, toUserResponse(updated))
 	}
 }

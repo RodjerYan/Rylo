@@ -87,7 +87,7 @@ export function clearAttachmentCaches(): void {
 const SAFE_MIME_TYPES = new Set([
   "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
   "image/avif", "image/bmp", "video/mp4", "video/webm", "audio/mpeg",
-  "audio/ogg", "audio/wav", "application/pdf",
+  "audio/ogg", "audio/wav", "audio/webm", "application/pdf",
 ]);
 
 /** Sanitize a Content-Type header value for use in a data: URI. */
@@ -224,11 +224,15 @@ export function fetchImageAsDataUrl(url: string): Promise<string | null> {
     // http/https, (2) responses are only used as image data, not executed.
     try {
       const useInsecure = isServerUrl(url);
+      log.debug("fetchImageAsDataUrl: fetching", { url, useInsecure, serverHost: _serverHost });
       const fetchOpts: RequestInit = useInsecure
         ? { danger: { acceptInvalidCerts: true, acceptInvalidHostnames: false } } as RequestInit
         : {};
       const res = await tauriFetch(url, fetchOpts);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        log.warn("fetchImageAsDataUrl: HTTP error", { url, status: res.status });
+        return null;
+      }
 
       const rawCt = res.headers.get("content-type") ?? "";
       const contentType = sanitizeContentType(rawCt);
@@ -272,9 +276,14 @@ async function fetchAudioAsBlobUrl(url: string): Promise<string | null> {
     const fetchOpts: RequestInit = useInsecure
       ? { danger: { acceptInvalidCerts: true, acceptInvalidHostnames: false } } as RequestInit
       : {};
+    log.debug("fetchAudioAsBlobUrl: fetching", { url, useInsecure });
     const res = await tauriFetch(url, fetchOpts);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      log.error("fetchAudioAsBlobUrl: HTTP error", { url, status: res.status });
+      return null;
+    }
     const blob = await res.blob();
+    log.debug("fetchAudioAsBlobUrl: ok", { url, size: blob.size, type: blob.type });
     return URL.createObjectURL(blob);
   } catch (err) {
     log.error("Failed to fetch audio as blob", { url, error: String(err) });

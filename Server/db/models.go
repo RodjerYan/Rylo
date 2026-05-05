@@ -17,6 +17,7 @@ type User struct {
 	Banned       bool
 	BanReason    *string
 	BanExpires   *string
+	PublicKey    *string
 }
 
 // Session represents a row in the sessions table.

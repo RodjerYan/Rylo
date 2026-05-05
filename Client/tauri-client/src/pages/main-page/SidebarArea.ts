@@ -35,6 +35,8 @@ import {
 } from "@lib/profiles";
 import type { ProfileManager } from "@lib/profiles";
 import { getDisplayProfileId, matchesProfileId } from "@lib/profileId";
+import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
+import { normalizeProfileMedia } from "@lib/profile-media";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,7 +123,7 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
   serverHeader.appendChild(serverInfoCol);
 
   // Invite button in the server header (proper styled button)
-  const headerInviteCtrl = createInviteManagerController({ api, getRoot });
+  const headerInviteCtrl = createInviteManagerController({ api, getRoot, username: authStore.getState().user?.username ?? "Пользователь" });
   const headerInviteBtn = createElement("button", {
     class: "sidebar-invite-btn",
     title: "Приглашения",
@@ -381,7 +383,8 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
           id: result.recipient.id,
           profileId: result.recipient.profile_id,
           username: result.recipient.username,
-          avatar: result.recipient.avatar,
+          avatar: normalizeProfileMedia(result.recipient.avatar),
+          banner: normalizeProfileMedia(result.recipient.banner) ?? member?.banner ?? null,
           status: result.recipient.status ?? member?.status ?? "offline",
           lastSeen: result.recipient.last_seen ?? member?.lastSeen ?? null,
         },
@@ -558,12 +561,43 @@ export function createSidebarArea(opts: SidebarAreaOptions): SidebarAreaResult {
                 : "Не в сети";
 
           const avatar = createElement("div", { class: "sidebar-dm-entry-avatar" });
-          setText(avatar, dm.recipient.username.charAt(0).toUpperCase());
-
           const statusDot = createElement("span", {
             class: `sidebar-dm-entry-status ${dm.recipient.status}`,
           });
-          avatar.appendChild(statusDot);
+          const fallbackInitial = dm.recipient.username.charAt(0).toUpperCase();
+          const appendFallbackAvatar = (): void => {
+            clearChildren(avatar);
+            setText(avatar, fallbackInitial);
+            avatar.appendChild(statusDot);
+          };
+          const avatarPath = typeof dm.recipient.avatar === "string" ? dm.recipient.avatar.trim() : "";
+          if (avatarPath !== "") {
+            const resolvedAvatar = resolveServerUrl(avatarPath);
+            if (isSafeUrl(resolvedAvatar)) {
+              void fetchImageAsDataUrl(resolvedAvatar).then((dataUrl) => {
+                if (dataUrl === null || dataUrl.trim() === "") {
+                  appendFallbackAvatar();
+                  return;
+                }
+                clearChildren(avatar);
+                const image = createElement("img", {
+                  src: dataUrl,
+                  alt: dm.recipient.username,
+                });
+                image.style.width = "100%";
+                image.style.height = "100%";
+                image.style.borderRadius = "50%";
+                avatar.appendChild(image);
+                avatar.appendChild(statusDot);
+              }).catch(() => {
+                appendFallbackAvatar();
+              });
+            } else {
+              appendFallbackAvatar();
+            }
+          } else {
+            appendFallbackAvatar();
+          }
 
           const info = createElement("div", { class: "sidebar-dm-entry-info" });
           const name = createElement("div", { class: "sidebar-dm-entry-name" }, dm.recipient.username);

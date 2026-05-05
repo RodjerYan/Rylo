@@ -17,6 +17,7 @@ type inviteReplicator interface {
 	Enabled() bool
 	MirrorInvite(context.Context, *db.Invite) error
 	RevokeInvite(context.Context, string) error
+	DeleteInvite(context.Context, string) error
 	SyncInviteCache(context.Context) error
 }
 
@@ -55,6 +56,7 @@ func MountInviteRoutes(r chi.Router, database *db.DB, replicator inviteReplicato
 
 		r.Post("/", handleCreateInvite(database, replicator))
 		r.Get("/", handleListInvites(database, replicator))
+		r.Delete("/{code}/delete", handleDeleteInvite(database, replicator))
 		r.Delete("/{code}", handleRevokeInvite(database, replicator))
 	})
 }
@@ -231,6 +233,85 @@ func handleRevokeInvite(database *db.DB, replicator inviteReplicator) http.Handl
 			if err := replicator.RevokeInvite(r.Context(), code); err != nil {
 				slog.Error("handleRevokeInvite RevokeInvite remote", "err", err, "code", code)
 			}
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleDeleteInvite permanently removes an invite from the local cache and
+// from Yandex Disk. Active invites are revoked first so they cannot be redeemed
+// during a best-effort remote cleanup failure.
+func handleDeleteInvite(database *db.DB, replicator inviteReplicator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code := chi.URLParam(r, "code")
+		user, ok := r.Context().Value(UserKey).(*db.User)
+		if !ok || user == nil {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{
+				Error:   "UNAUTHORIZED",
+				Message: "not authenticated",
+			})
+			return
+		}
+		role, _ := r.Context().Value(RoleKey).(*db.Role)
+
+		if replicator != nil && replicator.Enabled() {
+			if err := replicator.SyncInviteCache(r.Context()); err != nil {
+				slog.Warn("handleDeleteInvite SyncInviteCache", "err", err, "code", code, "user_id", user.ID)
+			}
+		}
+
+		inv, err := database.GetInvite(code)
+		if err != nil {
+			slog.Error("handleDeleteInvite GetInvite", "err", err, "code", code)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to look up invite",
+			})
+			return
+		}
+		if inv == nil {
+			writeJSON(w, http.StatusNotFound, errorResponse{
+				Error:   "NOT_FOUND",
+				Message: "invite not found",
+			})
+			return
+		}
+		if !canManageAnyInvites(role) && inv.CreatedBy != user.ID {
+			writeJSON(w, http.StatusForbidden, errorResponse{
+				Error:   "FORBIDDEN",
+				Message: "insufficient permissions",
+			})
+			return
+		}
+
+		if !inv.Revoked {
+			if err := database.RevokeInvite(code); err != nil {
+				slog.Error("handleDeleteInvite RevokeInvite", "err", err, "code", code)
+				writeJSON(w, http.StatusInternalServerError, errorResponse{
+					Error:   "SERVER_ERROR",
+					Message: "failed to deactivate invite before deletion",
+				})
+				return
+			}
+		}
+		if replicator != nil && replicator.Enabled() {
+			if err := replicator.DeleteInvite(r.Context(), code); err != nil {
+				slog.Error("handleDeleteInvite DeleteInvite remote", "err", err, "code", code)
+				writeJSON(w, http.StatusInternalServerError, errorResponse{
+					Error:   "SERVER_ERROR",
+					Message: "failed to delete invite from Yandex Disk",
+				})
+				return
+			}
+		}
+		if err := database.DeleteInvite(code); err != nil {
+			slog.Error("handleDeleteInvite DeleteInvite", "err", err, "code", code)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{
+				Error:   "SERVER_ERROR",
+				Message: "failed to delete invite",
+			})
+			return
 		}
 
 		w.WriteHeader(http.StatusNoContent)

@@ -16,6 +16,9 @@ func registerChatHandlers(r *HandlerRegistry) {
 	r.Register(MsgTypeChatSend, func(ctx context.Context, h *Hub, c *Client, reqID string, payload json.RawMessage) {
 		h.handleChatSend(ctx, c, reqID, payload)
 	})
+	r.Register(MsgTypeUpdatePublicKey, func(ctx context.Context, h *Hub, c *Client, reqID string, payload json.RawMessage) {
+		h.handleUpdatePublicKey(ctx, c, reqID, payload)
+	})
 	r.Register(MsgTypeChatEdit, func(ctx context.Context, h *Hub, c *Client, reqID string, payload json.RawMessage) {
 		h.handleChatEdit(ctx, c, reqID, payload)
 	})
@@ -34,10 +37,12 @@ func (h *Hub) handleChatSend(ctx context.Context, c *Client, reqID string, paylo
 	}
 
 	var p struct {
-		ChannelID   json.Number `json:"channel_id"`
-		Content     string      `json:"content"`
-		ReplyTo     *int64      `json:"reply_to"`
-		Attachments []string    `json:"attachments"`
+		ChannelID         json.Number `json:"channel_id"`
+		Content           string      `json:"content"`
+		ReplyTo           *int64      `json:"reply_to"`
+		Attachments       []string    `json:"attachments"`
+		EncryptedContent *string     `json:"encrypted_content"`
+		SenderPublicKey  *string     `json:"sender_public_key"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
 		c.sendMsg(buildErrorMsg(ErrCodeBadRequest, "invalid chat_send payload"))
@@ -234,7 +239,11 @@ func (h *Hub) handleChatSend(ctx context.Context, c *Client, reqID string, paylo
 	c.sendMsg(buildChatSendOK(reqID, msgID, msg.Timestamp))
 
 	// Broadcast message.
-	broadcast := buildChatMessage(msgID, channelID, c.userID, username, avatar, c.roleName, content, msg.Timestamp, p.ReplyTo, attachments, "")
+	var pk *string
+	if c.publicKey != "" {
+		pk = &c.publicKey
+	}
+	broadcast := buildChatMessage(msgID, channelID, c.userID, username, avatar, c.roleName, content, msg.Timestamp, p.ReplyTo, attachments, "", pk)
 
 	if isDM {
 		// DM: send directly to both participants instead of channel broadcast.
@@ -483,4 +492,35 @@ func (h *Hub) handleChatDelete(ctx context.Context, c *Client, _ string, payload
 	} else {
 		h.BroadcastToChannel(msg.ChannelID, deletedMsg)
 	}
+}
+
+type updatePublicKeyPayload struct {
+	PublicKey string `json:"public_key"`
+}
+
+func (h *Hub) handleUpdatePublicKey(ctx context.Context, c *Client, reqID string, payload json.RawMessage) {
+	if c.userID == 0 {
+		c.sendMsg(buildErrorMsg(ErrCodeForbidden, "not authenticated"))
+		return
+	}
+
+	var p updatePublicKeyPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.sendMsg(buildErrorMsg(ErrCodeBadRequest, "invalid update_public_key payload"))
+		return
+	}
+
+	var pk *string
+	if p.PublicKey != "" {
+		pk = &p.PublicKey
+		c.publicKey = p.PublicKey
+	}
+
+	if err := h.db.UpdateUserPublicKey(c.userID, pk); err != nil {
+		slog.Error("ws handleUpdatePublicKey", "err", err, "user_id", c.userID)
+		c.sendMsg(buildErrorMsg(ErrCodeInternal, "failed to update public key"))
+		return
+	}
+
+	c.sendMsg(buildAckMsg(reqID))
 }

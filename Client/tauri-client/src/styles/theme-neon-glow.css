@@ -20,9 +20,9 @@ body.theme-neon-glow {
   --accent-gradient: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
 
   /* Border glow — derived from accent for consistency */
-  --border:      rgba(0, 200, 255, 0.08);
-  --border-strong: rgba(0, 200, 255, 0.15);
-  --border-glow: rgba(0, 200, 255, 0.08);
+  --border:      rgba(0, 0, 0, 0.3);
+  --border-strong: rgba(0, 0, 0, 0.5);
+  --border-glow: transparent;
 
   /* Text link — follows accent */
   --text-link: var(--accent);

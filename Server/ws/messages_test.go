@@ -224,14 +224,16 @@ func TestBuildMemberJoin_Type(t *testing.T) {
 }
 
 func TestBuildMemberJoin_Payload(t *testing.T) {
-	user := &db.User{ID: 42, Username: "alice"}
+	bannerURL := "/api/v1/files/banner-id"
+	user := &db.User{ID: 42, Username: "alice", Banner: &bannerURL}
 	msg := buildMemberJoin(user, "admin")
 	var env struct {
 		Payload struct {
 			User struct {
-				ID       int64  `json:"id"`
-				Username string `json:"username"`
-				Role     string `json:"role"`
+				ID       int64   `json:"id"`
+				Username string  `json:"username"`
+				Banner   *string `json:"banner"`
+				Role     string  `json:"role"`
 			} `json:"user"`
 		} `json:"payload"`
 	}
@@ -244,6 +246,9 @@ func TestBuildMemberJoin_Payload(t *testing.T) {
 	}
 	if u.Username != "alice" {
 		t.Errorf("user.username = %q, want alice", u.Username)
+	}
+	if u.Banner == nil || *u.Banner != bannerURL {
+		t.Errorf("user.banner = %v, want %q", u.Banner, bannerURL)
 	}
 	if u.Role != "admin" {
 		t.Errorf("user.role = %q, want admin", u.Role)
@@ -287,6 +292,25 @@ func TestBuildMemberJoin_NonNilAvatar(t *testing.T) {
 	}
 }
 
+func TestBuildMemberJoin_EmptyBannerOmitted(t *testing.T) {
+	empty := "   "
+	user := &db.User{ID: 9, Username: "nobanner", Banner: &empty}
+	msg := buildMemberJoin(user, "member")
+	var env struct {
+		Payload struct {
+			User struct {
+				Banner *string `json:"banner"`
+			} `json:"user"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(msg, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if env.Payload.User.Banner != nil {
+		t.Errorf("banner = %v, want nil for empty banner", env.Payload.User.Banner)
+	}
+}
+
 // ─── buildMemberUpdate ────────────────────────────────────────────────────────
 
 func TestBuildMemberUpdate_Type(t *testing.T) {
@@ -318,6 +342,59 @@ func TestBuildMemberUpdate_Payload(t *testing.T) {
 	}
 	if env.Payload.Role != "moderator" {
 		t.Errorf("payload.role = %q, want moderator", env.Payload.Role)
+	}
+}
+
+func TestBuildMemberProfileUpdate_Payload(t *testing.T) {
+	avatar := "/api/v1/files/avatar-id"
+	banner := "color:#5865f2"
+	msg := buildMemberProfileUpdate(7, "moderator-fox", &avatar, &banner)
+	var env struct {
+		Type    string `json:"type"`
+		Payload struct {
+			UserID   int64   `json:"user_id"`
+			Username string  `json:"username"`
+			Avatar   *string `json:"avatar"`
+			Banner   *string `json:"banner"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(msg, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if env.Type != "member_profile_update" {
+		t.Errorf("type = %q, want member_profile_update", env.Type)
+	}
+	if env.Payload.UserID != 7 {
+		t.Errorf("payload.user_id = %d, want 7", env.Payload.UserID)
+	}
+	if env.Payload.Username != "moderator-fox" {
+		t.Errorf("payload.username = %q, want moderator-fox", env.Payload.Username)
+	}
+	if env.Payload.Avatar == nil || *env.Payload.Avatar != avatar {
+		t.Errorf("payload.avatar = %v, want %q", env.Payload.Avatar, avatar)
+	}
+	if env.Payload.Banner == nil || *env.Payload.Banner != banner {
+		t.Errorf("payload.banner = %v, want %q", env.Payload.Banner, banner)
+	}
+}
+
+func TestBuildMemberProfileUpdate_EmptyMediaToNull(t *testing.T) {
+	empty := "   "
+	msg := buildMemberProfileUpdate(9, "alice", &empty, &empty)
+	var env struct {
+		Payload struct {
+			Avatar *string `json:"avatar"`
+			Banner *string `json:"banner"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(msg, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if env.Payload.Avatar != nil {
+		t.Errorf("payload.avatar = %v, want nil", env.Payload.Avatar)
+	}
+	if env.Payload.Banner != nil {
+		t.Errorf("payload.banner = %v, want nil", env.Payload.Banner)
 	}
 }
 

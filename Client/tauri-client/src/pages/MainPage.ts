@@ -43,7 +43,6 @@ import { createVideoModeController } from "./main-page/VideoModeController";
 import type { VideoModeController } from "./main-page/VideoModeController";
 import { createChannelController } from "./main-page/ChannelController";
 import type { ChannelController } from "./main-page/ChannelController";
-import { createUpdateNotifier } from "@components/UpdateNotifier";
 import { createSidebarArea } from "./main-page/SidebarArea";
 import { createChatArea } from "./main-page/ChatArea";
 import { SCREENSHARE_TILE_ID_OFFSET } from "@lib/constants";
@@ -445,14 +444,6 @@ export function createMainPage(options: MainPageOptions): MountableComponent {
         log.error("Voice store subscription error", err);
       }
     }));
-
-    // Auto-update notifier — checks server for newer client version
-    if (apiConfig.host) {
-      const serverUrl = `https://${apiConfig.host}`;
-      const updateNotifier = createUpdateNotifier({ serverUrl });
-      updateNotifier.mount(root);
-      children.push(updateNotifier);
-    }
 
     container.appendChild(root);
 

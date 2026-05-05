@@ -6,13 +6,19 @@
 import { createElement, appendChildren, setText } from "@lib/dom";
 import { createIcon } from "@lib/icons";
 import type { MountableComponent } from "@lib/safe-render";
+import type { Attachment } from "@lib/types";
 import { createEmojiPicker } from "@components/EmojiPicker";
 import { createGifPicker } from "@components/GifPicker";
 
 export interface MessageInputOptions {
   readonly channelId: number;
   readonly channelName: string;
-  readonly onSend: (content: string, replyTo: number | null, attachments: readonly string[]) => void;
+  readonly onSend: (
+    content: string,
+    replyTo: number | null,
+    attachments: readonly string[],
+    attachmentMeta: readonly Attachment[],
+  ) => void;
   readonly onUploadFile?: (file: File) => Promise<{ id: string; url: string; filename: string }>;
   readonly onTyping: () => void;
   readonly onEditMessage: (messageId: number, content: string) => void;
@@ -29,6 +35,7 @@ const TYPING_THROTTLE_MS = 3_000;
 const MAX_TEXTAREA_HEIGHT = 200;
 const SEND_DEBOUNCE_MS = 200;
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB matches server limit
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 const ALLOWED_TYPES = [
   "image/",
   "video/",
@@ -57,8 +64,14 @@ export function createMessageInput(
   let editBar: HTMLDivElement | null = null;
   let attachmentPreviewBar: HTMLDivElement | null = null;
 
-  /** Pending attachment IDs to send with the next message. */
-  const pendingAttachments: { id: string; filename: string; readonly previewEl: HTMLDivElement }[] = [];
+  /** Pending attachments to send with the next message. */
+  const pendingAttachments: Array<{
+    id: string;
+    filename: string;
+    readonly previewEl: HTMLDivElement;
+    uploaded: Attachment | null;
+    progressTimer: ReturnType<typeof setInterval> | null;
+  }> = [];
   /** Count of file uploads currently in flight. */
   let pendingUploadCount = 0;
   /** References to picker close functions, set by mount() for destroy() to call. */
@@ -90,8 +103,18 @@ export function createMessageInput(
     }
   }
 
+  function formatBytes(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
   function clearPendingAttachments(): void {
     for (const att of pendingAttachments) {
+      if (att.progressTimer !== null) {
+        clearInterval(att.progressTimer);
+      }
       att.previewEl.remove();
     }
     pendingAttachments.length = 0;
@@ -108,6 +131,33 @@ export function createMessageInput(
     attachmentPreviewBar.appendChild(errEl);
     const t = setTimeout(() => { activeTimers.delete(t); errEl.remove(); }, 4000);
     activeTimers.add(t);
+  }
+
+  function attachFiles(files: readonly File[]): void {
+    if (options.onUploadFile === undefined || attachmentPreviewBar === null) return;
+    const realFiles = files.filter((file) => file.name.trim() !== "");
+    if (realFiles.length === 0) return;
+
+    const remainingSlots = Math.max(0, MAX_ATTACHMENTS_PER_MESSAGE - pendingAttachments.length);
+    if (remainingSlots === 0) {
+      showUploadError(`Можно прикрепить не больше ${MAX_ATTACHMENTS_PER_MESSAGE} файлов`);
+      return;
+    }
+
+    const accepted = realFiles.slice(0, remainingSlots);
+    if (realFiles.length > remainingSlots) {
+      showUploadError(`Можно прикрепить не больше ${MAX_ATTACHMENTS_PER_MESSAGE} файлов`);
+    }
+
+    for (const file of accepted) {
+      void handlePasteFile(file);
+    }
+    textarea?.focus();
+    updateSendBtnIcon();
+  }
+
+  function hasDraggedFiles(e: DragEvent): boolean {
+    return Array.from(e.dataTransfer?.types ?? []).includes("Files");
   }
 
   function handleSend(): void {
@@ -131,11 +181,11 @@ export function createMessageInput(
       options.onEditMessage(state.editing.messageId, content);
       cancelEdit();
     } else {
-      // Only include attachments that have finished uploading (have a real server ID)
-      const attachmentIds = pendingAttachments
-        .filter((a) => !a.id.startsWith("pending-"))
-        .map((a) => a.id);
-      options.onSend(content, state.replyTo?.messageId ?? null, attachmentIds);
+      const uploadedAttachments = pendingAttachments
+        .map((a) => a.uploaded)
+        .filter((a): a is Attachment => a !== null);
+      const attachmentIds = uploadedAttachments.map((a) => a.id);
+      options.onSend(content, state.replyTo?.messageId ?? null, attachmentIds, uploadedAttachments);
       clearReply();
       clearPendingAttachments();
     }
@@ -152,10 +202,12 @@ export function createMessageInput(
     if (hasContent && micMode) {
       micMode = false;
       sendBtn.innerHTML = "";
+      sendBtn.classList.add("send-btn");
       sendBtn.appendChild(createIcon("send", 20));
     } else if (!hasContent && !micMode) {
       micMode = true;
       sendBtn.innerHTML = "";
+      sendBtn.classList.remove("send-btn");
       sendBtn.appendChild(createIcon("mic", 20));
     }
   }
@@ -175,21 +227,31 @@ export function createMessageInput(
   /** Unique counter for preview items (before upload completes and we have a server ID). */
   let previewCounter = 0;
 
-  function removePreviewItem(tempId: string): void {
-    const idx = pendingAttachments.findIndex((a) => a.id === tempId);
-    const att = idx !== -1 ? pendingAttachments[idx] : undefined;
-    if (att !== undefined) {
-      const img = att.previewEl.querySelector("img");
-      if (img !== null && img.src.startsWith("blob:")) {
-        URL.revokeObjectURL(img.src);
-      }
-      att.previewEl.remove();
-      pendingAttachments.splice(idx, 1);
-      if (pendingAttachments.length === 0) {
-        attachmentPreviewBar?.classList.remove("visible");
-      }
-      updateSendBtnIcon();
+  function removePreviewAt(index: number): void {
+    if (index < 0 || index >= pendingAttachments.length) return;
+    const att = pendingAttachments[index]!;
+    if (att.progressTimer !== null) {
+      clearInterval(att.progressTimer);
+      att.progressTimer = null;
     }
+    const img = att.previewEl.querySelector("img");
+    if (img !== null && img.src.startsWith("blob:")) {
+      URL.revokeObjectURL(img.src);
+    }
+    att.previewEl.remove();
+    pendingAttachments.splice(index, 1);
+    if (pendingAttachments.length === 0) {
+      attachmentPreviewBar?.classList.remove("visible");
+    }
+    updateSendBtnIcon();
+  }
+
+  function removePreviewItem(tempId: string): void {
+    removePreviewAt(pendingAttachments.findIndex((a) => a.id === tempId));
+  }
+
+  function removePreviewElement(previewEl: HTMLDivElement): void {
+    removePreviewAt(pendingAttachments.findIndex((a) => a.previewEl === previewEl));
   }
 
   /** Read a File as a data: URL (more reliable than createObjectURL in WebView2). */
@@ -245,10 +307,19 @@ export function createMessageInput(
       appendChildren(item, icon, nameEl);
     }
 
-    // Loading spinner overlay
-    const spinner = createElement("div", { class: "attachment-preview-spinner" });
-    spinner.appendChild(createIcon("loader", 16));
-    item.appendChild(spinner);
+    // Professional upload indicator (shared for file and recorded-voice uploads)
+    const uploadIndicator = createElement("div", { class: "attachment-preview-upload-indicator" });
+    const uploadLabel = createElement("span", { class: "attachment-preview-upload-label" }, "Загрузка");
+    const uploadMeta = createElement(
+      "span",
+      { class: "attachment-preview-upload-meta" },
+      `${formatBytes(file.size)} • осталось ${formatBytes(file.size)}`,
+    );
+    const uploadTrack = createElement("div", { class: "attachment-preview-upload-track" });
+    const uploadBar = createElement("div", { class: "attachment-preview-upload-bar" });
+    uploadTrack.appendChild(uploadBar);
+    appendChildren(uploadIndicator, uploadLabel, uploadMeta, uploadTrack);
+    item.appendChild(uploadIndicator);
 
     const removeBtn = createElement("button", {
       class: "attachment-preview-remove",
@@ -257,12 +328,34 @@ export function createMessageInput(
     removeBtn.appendChild(createIcon("x", 14));
     removeBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      removePreviewItem(tempId);
+      removePreviewElement(item);
     }, { signal });
     item.appendChild(removeBtn);
 
     attachmentPreviewBar.appendChild(item);
-    pendingAttachments.push({ id: tempId, filename: file.name, previewEl: item });
+    const pendingAttachment = {
+      id: tempId,
+      filename: file.name,
+      previewEl: item,
+      uploaded: null as Attachment | null,
+      progressTimer: null as ReturnType<typeof setInterval> | null,
+    };
+    pendingAttachments.push(pendingAttachment);
+
+    // We don't receive low-level upload bytes from Tauri HTTP plugin, so we
+    // animate progress smoothly and still show precise total size and remaining estimate.
+    const startedAt = Date.now();
+    const estimatedDurationMs = Math.max(1100, Math.min(15000, Math.round(file.size / 130)));
+    const updateProgress = (): void => {
+      if (!item.isConnected) return;
+      const elapsed = Date.now() - startedAt;
+      const ratio = Math.min(0.93, elapsed / estimatedDurationMs);
+      const remaining = Math.max(0, Math.round(file.size * (1 - ratio)));
+      uploadBar.style.width = `${Math.max(8, Math.round(ratio * 100))}%`;
+      setText(uploadMeta, `${formatBytes(file.size)} • осталось ${formatBytes(remaining)}`);
+    };
+    updateProgress();
+    pendingAttachment.progressTimer = setInterval(updateProgress, 120);
 
     // Upload in background
     pendingUploadCount++;
@@ -271,10 +364,23 @@ export function createMessageInput(
       // Replace temp ID with real server ID
       const att = pendingAttachments.find((a) => a.id === tempId);
       if (att !== undefined) {
+        if (att.progressTimer !== null) {
+          clearInterval(att.progressTimer);
+          att.progressTimer = null;
+        }
         att.id = result.id;
         att.filename = result.filename;
+        att.uploaded = {
+          id: result.id,
+          filename: result.filename,
+          size: file.size,
+          mime: file.type === "" ? "application/octet-stream" : file.type,
+          url: result.url,
+        };
+        uploadBar.style.width = "100%";
+        setText(uploadMeta, `${formatBytes(file.size)} • осталось 0 B`);
         item.classList.remove("uploading");
-        spinner.remove();
+        uploadIndicator.remove();
       }
     } catch (err) {
       // Upload failed — remove preview and show error
@@ -343,7 +449,8 @@ export function createMessageInput(
 
     const inputBox = createElement("div", { class: "message-input-box" });
     const attachBtn = createElement("button",
-      { class: "input-btn attach-btn", "aria-label": "Attach file" }, "+");
+      { class: "input-btn attach-btn", "aria-label": "Attach file", title: "Attach file" });
+    attachBtn.appendChild(createIcon("paperclip", 20));
 
     // File picker via attach button
     if (options.onUploadFile !== undefined) {
@@ -351,11 +458,12 @@ export function createMessageInput(
         type: "file",
         style: "display: none;",
         accept: "image/*,video/*,audio/*,.pdf,.txt,.zip,.rar,.7z",
+        multiple: "multiple",
       });
       fileInput.addEventListener("change", () => {
-        const file = fileInput.files?.[0];
-        if (file != null) {
-          void handlePasteFile(file);
+        const files = fileInput.files;
+        if (files !== null) {
+          attachFiles(Array.from(files));
         }
         fileInput.value = "";
       }, { signal });
@@ -375,7 +483,7 @@ export function createMessageInput(
     const gifBtn = createElement("button",
       { class: "input-btn gif-btn", "aria-label": "GIF" }, "GIF");
     sendBtn = createElement("button",
-      { class: "input-btn send-btn", "aria-label": "Voice message / Send", "data-testid": "send-btn" });
+      { class: "input-btn", "aria-label": "Voice message / Send", "data-testid": "send-btn" });
     sendBtn.appendChild(createIcon("mic", 20));
 
     // Voice recording UI (Premium redesigned)
@@ -393,11 +501,11 @@ export function createMessageInput(
     const recordDot = createElement("div", { class: "record-dot" });
     
     const liveWaveform = createElement("div", { class: "record-waveform-live" });
-    const liveBars: HTMLDivElement[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 16; i++) {
       const bar = createElement("div", { class: "record-live-bar" }) as HTMLDivElement;
+      bar.style.setProperty("--wave-delay", `${(i % 8) * 0.1}s`);
+      bar.style.setProperty("--wave-peak", `${0.58 + (i % 5) * 0.08}`);
       liveWaveform.appendChild(bar);
-      liveBars.push(bar);
     }
 
     recordingTimeStr = createElement("span", { class: "record-timer" }, "0:00");
@@ -429,14 +537,55 @@ export function createMessageInput(
     textarea.addEventListener("paste", (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
       if (items === undefined) return;
+      const files: File[] = [];
       for (const item of items) {
         if (item.kind !== "file") continue;
         const file = item.getAsFile();
         if (file === null) continue;
+        files.push(file);
+      }
+      if (files.length > 0) {
         e.preventDefault();
-        void handlePasteFile(file);
+        attachFiles(files);
       }
     }, { signal });
+
+    let dragDepth = 0;
+    const clearDragState = (): void => {
+      dragDepth = 0;
+      inputBox.classList.remove("file-drag-over");
+    };
+
+    inputBox.addEventListener("dragenter", (e: DragEvent) => {
+      if (!hasDraggedFiles(e)) return;
+      e.preventDefault();
+      dragDepth++;
+      inputBox.classList.add("file-drag-over");
+    }, { signal });
+    inputBox.addEventListener("dragover", (e: DragEvent) => {
+      if (!hasDraggedFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer !== null) {
+        e.dataTransfer.dropEffect = "copy";
+      }
+      inputBox.classList.add("file-drag-over");
+    }, { signal });
+    inputBox.addEventListener("dragleave", (e: DragEvent) => {
+      if (!hasDraggedFiles(e)) return;
+      e.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) {
+        inputBox.classList.remove("file-drag-over");
+      }
+    }, { signal });
+    inputBox.addEventListener("drop", (e: DragEvent) => {
+      if (!hasDraggedFiles(e)) return;
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      clearDragState();
+      attachFiles(files);
+    }, { signal });
+    window.addEventListener("dragend", clearDragState, { signal });
 
     async function startRecording() {
       if (options.onUploadFile === undefined) return;
@@ -476,13 +625,7 @@ export function createMessageInput(
           const m = Math.floor(s / 60);
           const sec = s % 60;
           if (recordingTimeStr !== null) recordingTimeStr.textContent = `${m}:${sec.toString().padStart(2, "0")}`;
-          
-          // Animate live bars
-          liveBars.forEach(bar => {
-            const h = Math.floor(Math.random() * 80) + 20;
-            bar.style.height = `${h}%`;
-          });
-        }, 100); // Faster interval for smoother waveform
+        }, 250);
 
       } catch (err) {
         console.error("Mic error", err);
@@ -629,8 +772,13 @@ export function createMessageInput(
     for (const t of activeTimers) clearTimeout(t);
     activeTimers.clear();
     ac.abort();
-    // Image previews now use data: URLs (via readFileAsDataUrl) which don't
-    // require revocation — just clear the array and let GC reclaim them.
+    for (const att of pendingAttachments) {
+      if (att.progressTimer !== null) {
+        clearInterval(att.progressTimer);
+        att.progressTimer = null;
+      }
+    }
+    // Image previews use data: URLs (via readFileAsDataUrl) and don't need URL.revokeObjectURL.
     pendingAttachments.length = 0;
     root?.remove();
     root = null;

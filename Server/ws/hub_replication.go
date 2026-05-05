@@ -2,6 +2,7 @@ package ws
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/rylo/server/replication"
 )
@@ -61,6 +62,7 @@ func (h *Hub) HandleReplicatedMessage(msg replication.ImportedMessage) {
 		nil,
 		attachments,
 		msg.OriginServer,
+		sender.PublicKey,
 	)
 
 	if msg.ChannelKind == "dm" {
@@ -168,4 +170,17 @@ func (h *Hub) HandleReplicatedReaction(event replication.ImportedReaction) {
 	}
 
 	h.BroadcastToChannel(event.ChannelID, reactionMsg)
+}
+
+// HandleReplicatedProfileUpdate broadcasts imported username/avatar/banner
+// changes to connected clients in real time.
+func (h *Hub) HandleReplicatedProfileUpdate(event replication.ImportedProfileUpdate) {
+	if event.UserID <= 0 {
+		return
+	}
+	username := strings.TrimSpace(event.Username)
+	if username == "" {
+		return
+	}
+	h.BroadcastMemberProfileUpdate(event.UserID, username, event.Avatar, event.Banner)
 }

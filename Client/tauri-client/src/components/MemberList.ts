@@ -110,8 +110,8 @@ function createMemberItem(
       profileId: member.profileId,
       username: member.username,
       avatar: member.avatar,
+      banner: member.banner ?? null,
       status: member.status,
-      role: member.role,
     });
   }, { signal });
 

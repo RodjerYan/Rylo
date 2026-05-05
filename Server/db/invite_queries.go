@@ -61,3 +61,12 @@ func scanInvites(rows *sql.Rows, op string) ([]*Invite, error) {
 	}
 	return invites, nil
 }
+
+// DeleteInvite permanently removes an invite from the local database.
+func (d *DB) DeleteInvite(code string) error {
+	_, err := d.sqlDB.Exec(`DELETE FROM invites WHERE code = ?`, code)
+	if err != nil {
+		return fmt.Errorf("DeleteInvite: %w", err)
+	}
+	return nil
+}

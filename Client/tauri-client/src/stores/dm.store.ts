@@ -4,12 +4,14 @@
  */
 
 import { createStore } from "@lib/store";
+import { normalizeProfileMedia } from "@lib/profile-media";
 
 export interface DmUser {
   readonly id: number;
   readonly profileId?: string;
   readonly username: string;
   readonly avatar: string | null;
+  readonly banner?: string | null;
   readonly status: string;
   readonly lastSeen?: string | null;
 }
@@ -129,6 +131,30 @@ export function updateDmRecipientPresence(
               ...c.recipient,
               status,
               lastSeen: lastSeen ?? c.recipient.lastSeen ?? null,
+            },
+          }
+        : c,
+    ),
+  }));
+}
+
+/** Update recipient profile fields in all DM channels for this user. */
+export function updateDmRecipientProfile(
+  userId: number,
+  profile: { readonly username: string; readonly avatar: string | null; readonly banner: string | null },
+): void {
+  const normalizedAvatar = normalizeProfileMedia(profile.avatar);
+  const normalizedBanner = normalizeProfileMedia(profile.banner);
+  dmStore.setState((prev) => ({
+    channels: prev.channels.map((c) =>
+      c.recipient.id === userId
+        ? {
+            ...c,
+            recipient: {
+              ...c.recipient,
+              username: profile.username,
+              avatar: normalizedAvatar,
+              banner: normalizedBanner,
             },
           }
         : c,

@@ -8,6 +8,7 @@ import {
   getStatusIndicatorModifier,
   normalizeUserStatus,
 } from "@lib/presence";
+import { normalizeProfileMedia } from "@lib/profile-media";
 import { fetchImageAsDataUrl, isSafeUrl, resolveServerUrl } from "@components/message-list/attachments";
 import { getDisplayProfileId } from "@lib/profileId";
 
@@ -18,7 +19,6 @@ export interface UserProfileInput {
   readonly avatar?: string | null;
   readonly banner?: string | null;
   readonly status?: string;
-  readonly role?: string;
   readonly lastSeen?: string | null;
 }
 
@@ -29,7 +29,6 @@ interface UserProfileResolved {
   readonly avatar: string | null;
   readonly banner: string | null;
   readonly status: string;
-  readonly role: string;
   readonly lastSeen: string | null;
 }
 
@@ -40,19 +39,10 @@ let avatarEl: HTMLDivElement | null = null;
 let nameEl: HTMLDivElement | null = null;
 let idEl: HTMLDivElement | null = null;
 let statusEl: HTMLDivElement | null = null;
-let roleEl: HTMLDivElement | null = null;
 let closeBtn: HTMLButtonElement | null = null;
 let escHandlerBound = false;
 let avatarRequestSeq = 0;
 let bannerRequestSeq = 0;
-
-function translateRole(role: string): string {
-  const normalized = role.trim().toLowerCase();
-  if (normalized === "owner") return "Владелец";
-  if (normalized === "admin") return "Администратор";
-  if (normalized === "moderator") return "Модератор";
-  return "Участник";
-}
 
 function ensureOverlay(): void {
   if (overlay !== null) {
@@ -67,14 +57,13 @@ function ensureOverlay(): void {
   nameEl = createElement("div", { class: "profile-overlay-name" });
   idEl = createElement("div", { class: "profile-overlay-id" });
   statusEl = createElement("div", { class: "profile-overlay-meta" });
-  roleEl = createElement("div", { class: "profile-overlay-meta" });
   closeBtn = createElement("button", {
     class: "profile-overlay-close",
     type: "button",
     "aria-label": "Закрыть профиль",
   }, "✕");
 
-  appendChildren(body, nameEl, idEl, statusEl, roleEl);
+  appendChildren(body, nameEl, idEl, statusEl);
   appendChildren(card, bannerEl, avatarEl, closeBtn, body);
   overlay.appendChild(card);
   document.body.appendChild(overlay);
@@ -111,14 +100,16 @@ function resolveUserProfile(input: UserProfileInput): UserProfileResolved {
     ?? (isSelf ? me?.username : undefined)
     ?? `Пользователь #${input.id}`;
 
-  const avatar = input.avatar
-    ?? member?.avatar
-    ?? dmChannel?.recipient.avatar
-    ?? (isSelf ? me?.avatar ?? null : null)
+  const avatar = normalizeProfileMedia(input.avatar)
+    ?? normalizeProfileMedia(member?.avatar)
+    ?? normalizeProfileMedia(dmChannel?.recipient.avatar)
+    ?? (isSelf ? normalizeProfileMedia(me?.avatar) : null)
     ?? null;
 
-  const banner = input.banner
-    ?? (isSelf ? me?.banner ?? null : null)
+  const banner = normalizeProfileMedia(input.banner)
+    ?? normalizeProfileMedia(member?.banner)
+    ?? normalizeProfileMedia(dmChannel?.recipient.banner)
+    ?? (isSelf ? normalizeProfileMedia(me?.banner) : null)
     ?? null;
 
   const status = member?.status
@@ -130,10 +121,6 @@ function resolveUserProfile(input: UserProfileInput): UserProfileResolved {
     ?? member?.lastSeen
     ?? dmChannel?.recipient.lastSeen
     ?? null;
-
-  const role = input.role
-    ?? member?.role
-    ?? (isSelf ? me?.role ?? "member" : "member");
 
   return {
     id: input.id,
@@ -148,7 +135,6 @@ function resolveUserProfile(input: UserProfileInput): UserProfileResolved {
     avatar,
     banner,
     status,
-    role,
     lastSeen,
   };
 }
@@ -277,10 +263,6 @@ export function openUserProfile(input: UserProfileInput): void {
       }),
     );
   }
-  if (roleEl !== null) {
-    setText(roleEl, `Роль: ${translateRole(resolved.role)}`);
-  }
-
   overlay?.classList.add("open");
 }
 

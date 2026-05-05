@@ -46,7 +46,7 @@ func buildAuthRouterWithProxies(database *db.DB, limiter *auth.RateLimiter, trus
 
 func buildAuthRouterWithProxiesAndRegistration(database *db.DB, limiter *auth.RateLimiter, trustedProxies []string, registrationCfg config.RegistrationConfig) http.Handler {
 	r := chi.NewRouter()
-	api.MountAuthRoutes(r, database, limiter, trustedProxies, nil, registrationCfg)
+	api.MountAuthRoutes(r, database, limiter, trustedProxies, nil, nil, registrationCfg)
 	return r
 }
 

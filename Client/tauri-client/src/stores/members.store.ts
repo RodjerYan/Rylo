@@ -4,6 +4,7 @@
  */
 
 import { createStore } from "@lib/store";
+import { normalizeProfileMedia } from "@lib/profile-media";
 import type {
   ReadyMember,
   MemberJoinPayload,
@@ -15,9 +16,11 @@ export interface Member {
   readonly profileId?: string;
   readonly username: string;
   readonly avatar: string | null;
+  readonly banner?: string | null;
   readonly role: string;
   readonly status: UserStatus;
   readonly lastSeen?: string | null;
+  readonly publicKey?: string | null;
 }
 
 export interface MembersState {
@@ -49,10 +52,12 @@ export function setMembers(members: readonly ReadyMember[]): void {
       id: m.id,
       profileId: m.profile_id,
       username: m.username,
-      avatar: m.avatar,
+      avatar: normalizeProfileMedia(m.avatar),
+      banner: normalizeProfileMedia(m.banner),
       role: m.role,
       status: m.status,
       lastSeen: m.last_seen ?? null,
+      publicKey: m.public_key ?? null,
     });
   }
   // Clear all outstanding typing timers
@@ -74,7 +79,8 @@ export function addMember(payload: MemberJoinPayload): void {
       id: payload.user.id,
       profileId: payload.user.profile_id,
       username: payload.user.username,
-      avatar: payload.user.avatar,
+      avatar: normalizeProfileMedia(payload.user.avatar),
+      banner: normalizeProfileMedia(payload.user.banner),
       role: payload.user.role,
       status: "online" as UserStatus,
       lastSeen: null,
@@ -99,6 +105,34 @@ export function updateMemberRole(userId: number, role: string): void {
     if (!existing) return prev;
     const next = new Map(prev.members);
     next.set(userId, { ...existing, role });
+    return { ...prev, members: next };
+  });
+}
+
+/** Update username/avatar/banner from a member_profile_update event. */
+export function updateMemberProfile(
+  userId: number,
+  profile: { readonly username: string; readonly avatar: string | null; readonly banner: string | null },
+): void {
+  const normalizedAvatar = normalizeProfileMedia(profile.avatar);
+  const normalizedBanner = normalizeProfileMedia(profile.banner);
+  membersStore.setState((prev) => {
+    const existing = prev.members.get(userId);
+    if (!existing) return prev;
+    if (
+      existing.username === profile.username
+      && (existing.avatar ?? null) === normalizedAvatar
+      && (existing.banner ?? null) === normalizedBanner
+    ) {
+      return prev;
+    }
+    const next = new Map(prev.members);
+    next.set(userId, {
+      ...existing,
+      username: profile.username,
+      avatar: normalizedAvatar,
+      banner: normalizedBanner,
+    });
     return { ...prev, members: next };
   });
 }

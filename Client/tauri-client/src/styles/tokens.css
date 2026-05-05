@@ -115,4 +115,6 @@
   --avatar-offset-left: 16px;
   --message-content-left: 72px;
   --message-content-right: 48px;
+  --message-selection-gutter: 32px;
+  --message-selection-check-size: 22px;
 }

@@ -25,6 +25,7 @@ type DMUser struct {
 	ProfileID string  `json:"profile_id"`
 	Username  string  `json:"username"`
 	Avatar    string  `json:"avatar"`
+	Banner    string  `json:"banner,omitempty"`
 	Status    string  `json:"status"`
 	LastSeen  *string `json:"last_seen,omitempty"`
 }
@@ -143,6 +144,7 @@ func (d *DB) GetUserDMChannels(userID int64) ([]DMChannelInfo, error) {
 		    u.id                                          AS recipient_id,
 		    u.username                                    AS recipient_username,
 		    COALESCE(u.avatar, '')                        AS recipient_avatar,
+		    COALESCE(u.banner, '')                        AS recipient_banner,
 		    u.status                                      AS recipient_status,
 		    u.last_seen                                  AS recipient_last_seen,
 		    lm.id                                         AS last_message_id,
@@ -178,6 +180,7 @@ func (d *DB) GetUserDMChannels(userID int64) ([]DMChannelInfo, error) {
 			&info.Recipient.ID,
 			&info.Recipient.Username,
 			&info.Recipient.Avatar,
+			&info.Recipient.Banner,
 			&info.Recipient.Status,
 			&info.Recipient.LastSeen,
 			&lastMsgID,

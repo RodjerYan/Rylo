@@ -400,6 +400,12 @@ export function createMessageList(options: MessageListOptions): MessageListCompo
     try {
       log.debug("renderAll START", { count: renderAllCount });
       wasAtBottom = isNearBottom();
+      let anchorIdx = -1;
+      let anchorOffset = 0;
+      if (!wasAtBottom && virtualItems.length > 0) {
+        anchorIdx = offsetToIndex(root.scrollTop);
+        anchorOffset = root.scrollTop - offsetBefore(anchorIdx);
+      }
 
       rebuildItems();
       log.debug("renderAll rebuildItems done", { itemCount: virtualItems.length });
@@ -432,6 +438,14 @@ export function createMessageList(options: MessageListOptions): MessageListCompo
       if (wasAtBottom) {
         scrollToBottom();
         updateScrollToBottomBtn();
+      } else if (anchorIdx >= 0 && virtualItems.length > 0) {
+        const clampedAnchorIdx = Math.min(anchorIdx, virtualItems.length - 1);
+        root.scrollTop = Math.max(0, offsetBefore(clampedAnchorIdx) + anchorOffset);
+        // Recompute visible range after anchor restore.
+        renderWindow();
+        updateScrollToBottomBtn();
+      } else {
+        updateScrollToBottomBtn();
       }
       log.debug("renderAll END");
     } finally {
@@ -447,11 +461,19 @@ export function createMessageList(options: MessageListOptions): MessageListCompo
   let prevMessageCount = 0;
 
   const unsubLoadingReset = messagesStore.subscribeSelector(
-    (s) => s.messagesByChannel,
-    () => {
-      const msgs = getChannelMessages(options.channelId);
-      if (msgs.length !== prevMessageCount) {
-        prevMessageCount = msgs.length;
+    (s) => {
+      const baseLen = (s.messagesByChannel.get(options.channelId) ?? []).length;
+      let pendingLen = 0;
+      for (const pending of s.pendingMessages.values()) {
+        if (pending.channelId === options.channelId) {
+          pendingLen++;
+        }
+      }
+      return baseLen + pendingLen;
+    },
+    (totalCount) => {
+      if (totalCount !== prevMessageCount) {
+        prevMessageCount = totalCount;
         loadingOlder = false;
       }
     },
@@ -459,6 +481,14 @@ export function createMessageList(options: MessageListOptions): MessageListCompo
 
   let scrollRafId = 0;
   let resizeRafId = 0;
+  let dataRenderRafId = 0;
+  function scheduleRenderAll(): void {
+    if (dataRenderRafId !== 0) return;
+    dataRenderRafId = requestAnimationFrame(() => {
+      dataRenderRafId = 0;
+      renderAll();
+    });
+  }
   // resizeDirty tracking removed — resize observer batches via RAF directly
   function handleScroll(): void {
     if (root === null) return;
@@ -556,12 +586,19 @@ export function createMessageList(options: MessageListOptions): MessageListCompo
     ac.signal.addEventListener("abort", () => cancelAnimationFrame(initialScrollRaf));
 
     unsubscribers.push(messagesStore.subscribeSelector(
-      (s) => s.messagesByChannel,
-      () => { renderAll(); },
+      (s) => s.messagesByChannel.get(options.channelId) ?? null,
+      () => { scheduleRenderAll(); },
     ));
     unsubscribers.push(messagesStore.subscribeSelector(
-      (s) => s.pendingMessages,
-      () => { renderAll(); },
+      (s) => {
+        const parts: string[] = [];
+        for (const [correlationId, pending] of s.pendingMessages) {
+          if (pending.channelId !== options.channelId) continue;
+          parts.push(`${correlationId}:${pending.serverMessageId ?? 0}:${pending.serverTimestamp ?? ""}`);
+        }
+        return parts.join("|");
+      },
+      () => { scheduleRenderAll(); },
     ));
 
     // Only re-render when member roles change, not on presence/typing updates.
@@ -572,7 +609,7 @@ export function createMessageList(options: MessageListOptions): MessageListCompo
         for (const [id, m] of s.members) roles.set(id, m.role);
         return roles;
       },
-      () => { renderAll(); },
+      () => { scheduleRenderAll(); },
     ));
   }
 
@@ -585,6 +622,10 @@ export function createMessageList(options: MessageListOptions): MessageListCompo
     if (resizeRafId !== 0) {
       cancelAnimationFrame(resizeRafId);
       resizeRafId = 0;
+    }
+    if (dataRenderRafId !== 0) {
+      cancelAnimationFrame(dataRenderRafId);
+      dataRenderRafId = 0;
     }
     if (renderAllResetTimer !== 0) {
       clearTimeout(renderAllResetTimer);

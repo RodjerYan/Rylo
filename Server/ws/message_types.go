@@ -23,6 +23,7 @@ const (
 	MsgTypeVoiceScreenshare  = "voice_screenshare"
 	MsgTypePing              = "ping"
 	MsgTypeVoiceTokenRefresh = "voice_token_refresh"
+	MsgTypeUpdatePublicKey   = "update_public_key"
 )
 
 // Server → Client message types (sent in broadcasts/responses).
@@ -48,6 +49,7 @@ const (
 	MsgTypeMemberJoin     = "member_join"
 	MsgTypeMemberLeave    = "member_leave"
 	MsgTypeMemberUpdate   = "member_update"
+	MsgTypeMemberProfile  = "member_profile_update"
 	MsgTypeMemberBan      = "member_ban"
 	MsgTypeServerRestart  = "server_restart"
 	MsgTypeError          = "error"
